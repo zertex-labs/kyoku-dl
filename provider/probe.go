@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"strings"
 )
 
 // AudioInfo contains the important metadata from an audio file.
@@ -93,62 +92,4 @@ func ProbeAudioFile(filePath string) (*AudioInfo, error) {
 	}
 
 	return info, nil
-}
-
-// PrintAudioInfo prints audio metadata in a formatted way.
-func PrintAudioInfo(info *AudioInfo) {
-	fmt.Println("\n┌─ Audio Info ────────────────────────────────")
-	if info.Provider != "" {
-		fmt.Printf("│ Provider:      %s\n", strings.Title(info.Provider))
-	}
-	fmt.Printf("│ Codec:         %s\n", strings.ToUpper(info.Codec))
-	fmt.Printf("│ Sample Rate:   %s Hz\n", info.SampleRate)
-	fmt.Printf("│ Channels:      %d (%s)\n", info.Channels, info.ChannelLayout)
-	if info.BitDepth != "" && info.BitDepth != "0" {
-		fmt.Printf("│ Bit Depth:     %s-bit\n", info.BitDepth)
-	}
-	fmt.Printf("│ Duration:      %s\n", formatDuration(info.Duration))
-	fmt.Printf("│ Bitrate:       %s\n", formatBitrate(info.Bitrate))
-	fmt.Printf("│ File Size:     %s\n", formatFileSize(info.FileSize))
-	fmt.Println("└──────────────────────────────────────────────")
-}
-
-// formatDuration converts seconds to mm:ss format.
-func formatDuration(seconds float64) string {
-	mins := int(seconds) / 60
-	secs := int(seconds) % 60
-	return fmt.Sprintf("%d:%02d", mins, secs)
-}
-
-// formatBitrate formats bitrate in kbps.
-func formatBitrate(bitrate int64) string {
-	if bitrate == 0 {
-		return "N/A"
-	}
-	kbps := bitrate / 1000
-	return fmt.Sprintf("%d kbps", kbps)
-}
-
-// formatFileSize formats file size in human readable format.
-func formatFileSize(size int64) string {
-	if size == 0 {
-		return "N/A"
-	}
-
-	const (
-		KB = 1024
-		MB = KB * 1024
-		GB = MB * 1024
-	)
-
-	switch {
-	case size >= GB:
-		return fmt.Sprintf("%.2f GB", float64(size)/GB)
-	case size >= MB:
-		return fmt.Sprintf("%.2f MB", float64(size)/MB)
-	case size >= KB:
-		return fmt.Sprintf("%.2f KB", float64(size)/KB)
-	default:
-		return fmt.Sprintf("%d bytes", size)
-	}
 }
