@@ -26,9 +26,8 @@ type Album struct {
 
 // Config holds common application configuration.
 type Config struct {
-	Format   string `json:"format"`
-	Debug    bool   `json:"debug"`
-	ShowInfo bool   `json:"show_info"` // Show audio metadata after download
+	Format string `json:"format"`
+	Debug  bool   `json:"debug"`
 }
 
 // DefaultConfig returns a default configuration.

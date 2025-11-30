@@ -6,14 +6,12 @@ import (
 
 // Colors
 var (
-	Primary    = lipgloss.Color("#7C3AED") // Purple
-	Secondary  = lipgloss.Color("#06B6D4") // Cyan
-	Success    = lipgloss.Color("#10B981") // Green
-	Warning    = lipgloss.Color("#F59E0B") // Amber
-	Error      = lipgloss.Color("#EF4444") // Red
-	Muted      = lipgloss.Color("#6B7280") // Gray
-	Background = lipgloss.Color("#1F2937") // Dark gray
-	Foreground = lipgloss.Color("#F9FAFB") // White
+	Primary   = lipgloss.Color("#7C3AED") // Purple
+	Secondary = lipgloss.Color("#06B6D4") // Cyan
+	Success   = lipgloss.Color("#10B981") // Green
+	Warning   = lipgloss.Color("#F59E0B") // Amber
+	Error     = lipgloss.Color("#EF4444") // Red
+	Muted     = lipgloss.Color("#6B7280") // Gray
 )
 
 // Text styles
@@ -27,10 +25,6 @@ var (
 			Foreground(Secondary).
 			Italic(true)
 
-	BoldStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(Foreground)
-
 	MutedStyle = lipgloss.NewStyle().
 			Foreground(Muted)
 
@@ -39,21 +33,10 @@ var (
 
 	ErrorStyle = lipgloss.NewStyle().
 			Foreground(Error)
-
-	WarningStyle = lipgloss.NewStyle().
-			Foreground(Warning)
 )
 
 // Component styles
 var (
-	// Header for the app
-	HeaderStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(Primary).
-			Background(Background).
-			Padding(0, 1).
-			MarginBottom(1)
-
 	// Box for containing content
 	BoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -73,31 +56,8 @@ var (
 				Width(6)
 
 	TrackTitleStyle = lipgloss.NewStyle().
-			Foreground(Foreground).
+			Foreground(lipgloss.Color("#F9FAFB")).
 			Bold(true)
-
-	TrackArtistStyle = lipgloss.NewStyle().
-				Foreground(Secondary)
-
-	TrackStatusPending = lipgloss.NewStyle().
-				Foreground(Muted)
-
-	TrackStatusDownloading = lipgloss.NewStyle().
-				Foreground(Warning)
-
-	TrackStatusComplete = lipgloss.NewStyle().
-				Foreground(Success)
-
-	TrackStatusError = lipgloss.NewStyle().
-				Foreground(Error)
-
-	// Info panel styles
-	InfoLabelStyle = lipgloss.NewStyle().
-			Foreground(Muted).
-			Width(12)
-
-	InfoValueStyle = lipgloss.NewStyle().
-			Foreground(Foreground)
 
 	// Spinner
 	SpinnerStyle = lipgloss.NewStyle().
@@ -113,19 +73,14 @@ var (
 const (
 	IconCheck    = "✓"
 	IconCross    = "✗"
-	IconArrow    = "→"
 	IconMusic    = "♫"
 	IconAlbum    = "💿"
-	IconDownload = "↓"
-	IconSpinner  = "◐"
 	IconDot      = "•"
-	IconPlay     = "▶"
-	IconPause    = "⏸"
 	IconProgress = "█"
 	IconEmpty    = "░"
 )
 
-// Helper functions
+// RenderProgressBar renders a progress bar with the given percentage and width.
 func RenderProgressBar(percent float64, width int) string {
 	filled := int(percent / 100 * float64(width))
 	if filled > width {
@@ -144,17 +99,4 @@ func RenderProgressBar(percent float64, width int) string {
 		}
 	}
 	return bar
-}
-
-func StatusIcon(status string) string {
-	switch status {
-	case "complete":
-		return SuccessStyle.Render(IconCheck)
-	case "error":
-		return ErrorStyle.Render(IconCross)
-	case "downloading":
-		return WarningStyle.Render(IconDownload)
-	default:
-		return MutedStyle.Render(IconDot)
-	}
 }

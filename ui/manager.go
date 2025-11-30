@@ -3,17 +3,12 @@ package ui
 import (
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/zertex-labs/kyoku-dl/provider"
-)
-
-const (
-	downloadBufferSize = 256 * 1024 // 256KB
 )
 
 // DownloadManager handles downloading with a TUI
@@ -77,16 +72,15 @@ func (dm *DownloadManager) downloadAll(tasks []DownloadTask) {
 			continue
 		}
 
-		// Send complete message
-		dm.program.Send(TrackCompleteMsg{Index: task.Index})
-
-		// Show audio info if enabled
-		if dm.config.ShowInfo {
-			if info, probeErr := provider.ProbeAudioFile(task.FilePath); probeErr == nil {
-				info.Provider = dm.model.Provider
-				provider.PrintAudioInfo(info)
-			}
+		// Probe audio info
+		var audioInfo *provider.AudioInfo
+		if info, probeErr := provider.ProbeAudioFile(task.FilePath); probeErr == nil {
+			info.Provider = dm.model.Provider
+			audioInfo = info
 		}
+
+		// Send complete message with audio info
+		dm.program.Send(TrackCompleteMsg{Index: task.Index, AudioInfo: audioInfo})
 	}
 
 	// Signal all downloads complete
@@ -95,26 +89,12 @@ func (dm *DownloadManager) downloadAll(tasks []DownloadTask) {
 
 func (dm *DownloadManager) downloadFile(task DownloadTask) error {
 	// Create HTTP request
-	req, err := http.NewRequest("GET", task.StreamURL, nil)
+	req, err := provider.NewDownloadRequest(task.StreamURL)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return err
 	}
 
-	req.Header.Set("User-Agent", "kyoku-dl/1.0")
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("Connection", "keep-alive")
-
-	client := &http.Client{
-		Timeout: 0,
-		Transport: &http.Transport{
-			MaxIdleConns:        10,
-			IdleConnTimeout:     30 * time.Second,
-			DisableCompression:  true,
-			DisableKeepAlives:   false,
-			MaxIdleConnsPerHost: 5,
-		},
-	}
+	client := provider.NewHTTPClient()
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -122,15 +102,13 @@ func (dm *DownloadManager) downloadFile(task DownloadTask) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != 200 {
 		return fmt.Errorf("download failed with status: %s", resp.Status)
 	}
 
 	// Create directory structure if needed
-	if dir := provider.GetDirectory(task.FilePath); dir != "" {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create directory: %w", err)
-		}
+	if err := provider.EnsureDirectory(task.FilePath); err != nil {
+		return err
 	}
 
 	// Create output file
@@ -145,7 +123,7 @@ func (dm *DownloadManager) downloadFile(task DownloadTask) error {
 	var written int64
 	startTime := time.Now()
 	lastUpdate := time.Now()
-	buffer := make([]byte, downloadBufferSize)
+	buffer := make([]byte, provider.DownloadBufferSize)
 
 	for {
 		if dm.model.Quitting {
@@ -187,30 +165,6 @@ func (dm *DownloadManager) downloadFile(task DownloadTask) error {
 		}
 		if readErr != nil {
 			return fmt.Errorf("failed to read: %w", readErr)
-		}
-	}
-
-	return nil
-}
-
-// RunSimple runs downloads without TUI (for non-interactive mode)
-func RunSimple(tasks []DownloadTask, config provider.Config, providerName string) error {
-	for i, task := range tasks {
-		fmt.Printf("\n[%d/%d] Downloading: %s\n", i+1, len(tasks), task.TrackInfo.Title)
-
-		written, err := provider.DownloadFile(task.StreamURL, task.FilePath)
-		if err != nil {
-			fmt.Printf("  Error: %v\n", err)
-			continue
-		}
-
-		fmt.Printf("  Saved: %s (%s)\n", task.FilePath, formatBytes(written))
-
-		if config.ShowInfo {
-			if info, probeErr := provider.ProbeAudioFile(task.FilePath); probeErr == nil {
-				info.Provider = providerName
-				provider.PrintAudioInfo(info)
-			}
 		}
 	}
 

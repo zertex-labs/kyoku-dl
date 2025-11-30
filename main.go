@@ -43,7 +43,6 @@ func main() {
 	}
 
 	debug := flag.Bool("debug", false, "Enable debug output")
-	showInfo := flag.Bool("info", false, "Show audio metadata after download (requires ffprobe)")
 	flag.Parse()
 
 	if flag.NArg() == 0 {
@@ -59,9 +58,6 @@ func main() {
 
 	if *debug {
 		config.Debug = true
-	}
-	if *showInfo {
-		config.ShowInfo = true
 	}
 
 	// Create registry and register providers

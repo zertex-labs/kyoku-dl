@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/zertex-labs/kyoku-dl/provider"
 )
 
 // TrackStatus represents the download status of a track
@@ -33,6 +34,7 @@ type TrackInfo struct {
 	Downloaded int64
 	Speed      float64
 	Error      string
+	AudioInfo  *provider.AudioInfo // Audio metadata after download
 }
 
 // DownloadModel is the bubbletea model for the download UI
@@ -73,7 +75,8 @@ type TrackProgressMsg struct {
 	Speed      float64
 }
 type TrackCompleteMsg struct {
-	Index int
+	Index     int
+	AudioInfo *provider.AudioInfo
 }
 type TrackErrorMsg struct {
 	Index int
@@ -157,6 +160,7 @@ func (m *DownloadModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Index < len(m.Tracks) {
 			m.Tracks[msg.Index].Status = StatusComplete
 			m.Tracks[msg.Index].Progress = 100
+			m.Tracks[msg.Index].AudioInfo = msg.AudioInfo
 		}
 		m.mu.Unlock()
 
@@ -286,7 +290,47 @@ func (m *DownloadModel) renderTrack(b *strings.Builder, index int, track TrackIn
 		line += " " + ErrorStyle.Render(fmt.Sprintf("(%s)", track.Error))
 	}
 
+	// If complete and has audio info, append to the same line
+	if track.Status == StatusComplete && track.AudioInfo != nil {
+		info := track.AudioInfo
+
+		// Format: codec • sample rate • bit depth • bitrate • size
+		details := []string{}
+
+		if info.Codec != "" {
+			details = append(details, strings.ToUpper(info.Codec))
+		}
+		if info.SampleRate != "" {
+			details = append(details, fmt.Sprintf("%s Hz", info.SampleRate))
+		}
+		if info.BitDepth != "" && info.BitDepth != "0" {
+			details = append(details, fmt.Sprintf("%s-bit", info.BitDepth))
+		}
+		if info.Channels > 0 {
+			layout := info.ChannelLayout
+			if layout == "" {
+				if info.Channels == 2 {
+					layout = "stereo"
+				} else if info.Channels == 1 {
+					layout = "mono"
+				}
+			}
+			details = append(details, layout)
+		}
+		if info.Bitrate > 0 {
+			details = append(details, fmt.Sprintf("%d kbps", info.Bitrate/1000))
+		}
+		if info.FileSize > 0 {
+			details = append(details, formatBytes(info.FileSize))
+		}
+
+		if len(details) > 0 {
+			line += " " + MutedStyle.Render("→ "+strings.Join(details, " • "))
+		}
+	}
+
 	b.WriteString(line + "\n")
+
 	return completed
 }
 
@@ -313,51 +357,4 @@ func formatBytes(bytes int64) string {
 	default:
 		return fmt.Sprintf("%d B", bytes)
 	}
-}
-
-// UpdateTrackStart updates the model when a track starts downloading
-func (m *DownloadModel) UpdateTrackStart(index int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if index < len(m.Tracks) {
-		m.Tracks[index].Status = StatusDownloading
-		m.CurrentTrack = index
-	}
-}
-
-// UpdateTrackProgress updates the download progress for a track
-func (m *DownloadModel) UpdateTrackProgress(index int, progress float64, downloaded, size int64, speed float64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if index < len(m.Tracks) {
-		m.Tracks[index].Progress = progress
-		m.Tracks[index].Downloaded = downloaded
-		m.Tracks[index].Size = size
-		m.Tracks[index].Speed = speed
-	}
-}
-
-// UpdateTrackComplete marks a track as complete
-func (m *DownloadModel) UpdateTrackComplete(index int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if index < len(m.Tracks) {
-		m.Tracks[index].Status = StatusComplete
-		m.Tracks[index].Progress = 100
-	}
-}
-
-// UpdateTrackError marks a track as failed
-func (m *DownloadModel) UpdateTrackError(index int, err string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if index < len(m.Tracks) {
-		m.Tracks[index].Status = StatusError
-		m.Tracks[index].Error = err
-	}
-}
-
-// MarkAllComplete marks the download as complete
-func (m *DownloadModel) MarkAllComplete() {
-	m.Done = true
 }

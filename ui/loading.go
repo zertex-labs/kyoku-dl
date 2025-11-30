@@ -91,11 +91,6 @@ func (m *LoadingModel) View() string {
 	return b.String()
 }
 
-// SetDetail updates the detail text
-func (m *LoadingModel) SetDetail(detail string) {
-	m.detail = detail
-}
-
 // RunLoading runs a loading spinner while executing a function
 func RunLoading(message string, fn func() error) error {
 	model := NewLoadingModel(message)
@@ -119,27 +114,4 @@ func RunLoading(message string, fn func() error) error {
 	}
 
 	return nil
-}
-
-// RunLoadingWithResult runs a loading spinner and returns a result
-func RunLoadingWithResult[T any](message string, fn func() (T, error)) (T, error) {
-	var result T
-	var fnErr error
-
-	model := NewLoadingModel(message)
-	p := tea.NewProgram(model)
-
-	// Run the function in a goroutine
-	go func() {
-		result, fnErr = fn()
-		p.Send(LoadingCompleteMsg{Error: fnErr})
-	}()
-
-	// Run the TUI
-	_, err := p.Run()
-	if err != nil {
-		return result, err
-	}
-
-	return result, fnErr
 }
