@@ -64,12 +64,22 @@ func main() {
 	registry := provider.NewRegistry()
 
 	// Register Tidal provider
-	tidalProvider, err := tidal.NewFromFiles(TidalAuthFilename, config)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Tidal provider not available: %v\n", err)
-	} else {
-		registry.Register(tidalProvider)
+	// Try to load existing auth, or start with empty auth
+	tidalAuth, loadErr := tidal.LoadAuth(TidalAuthFilename)
+	if loadErr != nil {
+		// No auth file yet - that's fine, we'll do device login below
+		tidalAuth = tidal.Auth{}
 	}
+
+	// Ensure we have valid auth (refresh or device login if needed)
+	tidalAuth, err = tidal.EnsureAuth(TidalAuthFilename, tidalAuth)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	tidalProvider := tidal.NewWithPath(tidalAuth, TidalAuthFilename, config)
+	registry.Register(tidalProvider)
 
 	// Get URL argument
 	url := flag.Arg(0)

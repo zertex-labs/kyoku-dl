@@ -30,6 +30,7 @@ var (
 // Tidal implements the provider.Provider interface for Tidal.
 type Tidal struct {
 	auth       Auth
+	authPath   string
 	config     provider.Config
 	httpClient *http.Client
 	debug      bool
@@ -47,6 +48,14 @@ func New(auth Auth, config provider.Config) *Tidal {
 	}
 }
 
+// NewWithPath creates a new Tidal provider with the given auth, config, and auth file path
+// so that refreshed tokens can be persisted to disk.
+func NewWithPath(auth Auth, authPath string, config provider.Config) *Tidal {
+	t := New(auth, config)
+	t.authPath = authPath
+	return t
+}
+
 // NewFromFiles loads auth from a JSON file and creates a Tidal provider.
 func NewFromFiles(authPath string, config provider.Config) (*Tidal, error) {
 	auth, err := LoadAuth(authPath)
@@ -54,7 +63,7 @@ func NewFromFiles(authPath string, config provider.Config) (*Tidal, error) {
 		return nil, fmt.Errorf("failed to load auth: %w", err)
 	}
 
-	return New(auth, config), nil
+	return NewWithPath(auth, authPath, config), nil
 }
 
 // LoadAuth reads authentication data from a JSON file.
@@ -87,6 +96,36 @@ func (t *Tidal) MatchesURL(rawURL string) bool {
 // IsAuthenticated checks if the provider has valid credentials.
 func (t *Tidal) IsAuthenticated() bool {
 	return t.auth.Token != "" && t.auth.Token != "YOUR_TIDAL_AUTH_TOKEN_HERE"
+}
+
+// SetAuth updates the provider's authentication credentials and auth file path.
+func (t *Tidal) SetAuth(auth Auth, authPath string) {
+	t.auth = auth
+	t.authPath = authPath
+}
+
+// ensureValidToken checks if the token is expired and refreshes it if needed.
+func (t *Tidal) ensureValidToken() error {
+	if !t.auth.IsTokenExpired() {
+		return nil
+	}
+
+	if t.auth.RefreshToken == "" {
+		return fmt.Errorf("token expired and no refresh token available - please log in again")
+	}
+
+	if err := RefreshAccessToken(&t.auth); err != nil {
+		return fmt.Errorf("failed to refresh token: %w", err)
+	}
+
+	// Persist refreshed token to disk
+	if t.authPath != "" {
+		if err := SaveAuth(t.authPath, t.auth); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not save refreshed token: %v\n", err)
+		}
+	}
+
+	return nil
 }
 
 // SetDebug enables or disables debug output.
@@ -324,6 +363,11 @@ func (t *Tidal) DownloadAlbum(tidalURL string) error {
 // --- Internal Methods ---
 
 func (t *Tidal) performAPICall(path string, query url.Values) ([]byte, int, error) {
+	// Auto-refresh token if expired
+	if err := t.ensureValidToken(); err != nil {
+		return nil, 0, err
+	}
+
 	fullURL := APIBaseURL + path + "?" + query.Encode()
 
 	req, err := http.NewRequest("GET", fullURL, nil)
