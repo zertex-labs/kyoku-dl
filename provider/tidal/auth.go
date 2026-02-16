@@ -286,7 +286,10 @@ func DeviceLogin() (*Auth, error) {
 
 	verifyURL := deviceAuth.VerificationURIComplete
 	if verifyURL == "" {
-		verifyURL = "https://" + deviceAuth.VerificationURI
+		verifyURL = deviceAuth.VerificationURI
+	}
+	if !strings.HasPrefix(verifyURL, "https://") && !strings.HasPrefix(verifyURL, "http://") {
+		verifyURL = "https://" + verifyURL
 	}
 
 	fmt.Println()

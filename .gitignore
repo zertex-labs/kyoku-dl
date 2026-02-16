@@ -1,0 +1,25 @@
+# Binary
+kyoku-dl
+
+# Auth credentials
+tidal-auth.json
+
+# Config (user-specific)
+config.json
+
+# Downloaded media
+*.flac
+*.m4a
+*.mp3
+*.ogg
+*.wav
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

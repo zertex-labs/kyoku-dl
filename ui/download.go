@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/bubbles/progress"
@@ -20,6 +21,7 @@ const (
 	StatusDownloading
 	StatusComplete
 	StatusError
+	StatusSkipped
 )
 
 // TrackInfo holds information about a track being downloaded
@@ -55,11 +57,17 @@ type DownloadModel struct {
 
 	// State
 	Done      bool
-	Quitting  bool
+	quitting  atomic.Bool
 	StartTime time.Time
 
 	// Callbacks
 	mu sync.Mutex
+}
+
+// IsQuitting returns whether the user has requested cancellation.
+// Safe to call from any goroutine.
+func (m *DownloadModel) IsQuitting() bool {
+	return m.quitting.Load()
 }
 
 // Messages
@@ -81,6 +89,9 @@ type TrackCompleteMsg struct {
 type TrackErrorMsg struct {
 	Index int
 	Error string
+}
+type TrackSkippedMsg struct {
+	Index int
 }
 type AllCompleteMsg struct{}
 
@@ -125,7 +136,7 @@ func (m *DownloadModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
-			m.Quitting = true
+			m.quitting.Store(true)
 			return m, tea.Quit
 		}
 
@@ -172,6 +183,13 @@ func (m *DownloadModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mu.Unlock()
 
+	case TrackSkippedMsg:
+		m.mu.Lock()
+		if msg.Index < len(m.Tracks) {
+			m.Tracks[msg.Index].Status = StatusSkipped
+		}
+		m.mu.Unlock()
+
 	case AllCompleteMsg:
 		m.Done = true
 		return m, tea.Quit
@@ -187,7 +205,7 @@ func (m *DownloadModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the UI
 func (m *DownloadModel) View() string {
-	if m.Quitting {
+	if m.quitting.Load() {
 		return MutedStyle.Render("Download cancelled.\n")
 	}
 
@@ -207,22 +225,30 @@ func (m *DownloadModel) View() string {
 
 	// Track list
 	completedCount := 0
+	skippedCount := 0
 	for i, track := range m.Tracks {
 		completedCount += m.renderTrack(&b, i, track)
+		if track.Status == StatusSkipped {
+			skippedCount++
+		}
 	}
+	downloadedCount := completedCount - skippedCount
 
 	// Summary
 	b.WriteString("\n")
 	elapsed := time.Since(m.StartTime).Round(time.Second)
 
 	if m.Done {
-		summary := fmt.Sprintf("%s Downloaded %d/%d tracks in %s",
+		summaryParts := fmt.Sprintf("%s Downloaded %d/%d tracks in %s",
 			SuccessStyle.Render(IconCheck),
-			completedCount,
+			downloadedCount,
 			len(m.Tracks),
 			elapsed,
 		)
-		b.WriteString(BoxStyle.Render(summary))
+		if skippedCount > 0 {
+			summaryParts += fmt.Sprintf(" (%d skipped)", skippedCount)
+		}
+		b.WriteString(BoxStyle.Render(summaryParts))
 		b.WriteString("\n")
 	} else {
 		// Overall progress
@@ -269,6 +295,10 @@ func (m *DownloadModel) renderTrack(b *strings.Builder, index int, track TrackIn
 	case StatusError:
 		status = ErrorStyle.Render(IconCross)
 		title = ErrorStyle.Render(track.Title)
+	case StatusSkipped:
+		status = WarningStyle.Render(IconSkip)
+		title = MutedStyle.Render(track.Title)
+		completed = 1
 	}
 
 	// First line: status, number, title
@@ -288,6 +318,11 @@ func (m *DownloadModel) renderTrack(b *strings.Builder, index int, track TrackIn
 	// If error, show error message
 	if track.Status == StatusError && track.Error != "" {
 		line += " " + ErrorStyle.Render(fmt.Sprintf("(%s)", track.Error))
+	}
+
+	// If skipped, show reason
+	if track.Status == StatusSkipped {
+		line += " " + MutedStyle.Render("(already exists)")
 	}
 
 	// If complete and has audio info, append to the same line

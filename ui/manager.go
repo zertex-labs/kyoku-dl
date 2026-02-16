@@ -34,6 +34,7 @@ type DownloadTask struct {
 	TrackInfo TrackInfo
 	StreamURL string
 	FilePath  string
+	Metadata  provider.Track // Full track metadata for tagging
 }
 
 // Run starts the TUI and downloads
@@ -49,7 +50,7 @@ func (dm *DownloadManager) Run(tasks []DownloadTask) error {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 
-	if dm.model.Quitting {
+	if dm.model.IsQuitting() {
 		return fmt.Errorf("download cancelled by user")
 	}
 
@@ -57,19 +58,78 @@ func (dm *DownloadManager) Run(tasks []DownloadTask) error {
 }
 
 func (dm *DownloadManager) downloadAll(tasks []DownloadTask) {
-	for _, task := range tasks {
-		if dm.model.Quitting {
+	// Create MusicBrainz client if enrichment is enabled
+	var mbClient *provider.MBClient
+	if dm.config.MusicBrainz {
+		mbClient = provider.NewMBClient()
+	}
+
+	// mbResult channels for parallel lookahead: start MB lookup for the
+	// current task while downloading, so the ~1s API latency is hidden
+	// behind download time.
+	type mbResult struct {
+		err error
+	}
+
+	// Start the first MB lookup in parallel with the first download
+	var mbCh chan mbResult
+	if mbClient != nil && len(tasks) > 0 && tasks[0].Metadata.ISRC != "" {
+		mbCh = make(chan mbResult, 1)
+		go func(t *provider.Track) {
+			mbCh <- mbResult{err: mbClient.Enrich(t)}
+		}(&tasks[0].Metadata)
+	}
+
+	for i, task := range tasks {
+		if dm.model.IsQuitting() {
 			break
+		}
+
+		// Skip if file already exists with non-zero size
+		if info, err := os.Stat(task.FilePath); err == nil && info.Size() > 0 {
+			dm.program.Send(TrackSkippedMsg{Index: task.Index})
+			// Drain the current MB result if it was started for this track
+			if mbCh != nil {
+				<-mbCh
+				mbCh = nil
+			}
+			continue
 		}
 
 		// Send start message
 		dm.program.Send(TrackStartMsg{Index: task.Index})
 
+		// Start MB lookup for the NEXT task in parallel with this download
+		var nextMBCh chan mbResult
+		if mbClient != nil && i+1 < len(tasks) && tasks[i+1].Metadata.ISRC != "" {
+			nextMBCh = make(chan mbResult, 1)
+			go func(t *provider.Track) {
+				nextMBCh <- mbResult{err: mbClient.Enrich(t)}
+			}(&tasks[i+1].Metadata)
+		}
+
 		// Download the file
 		err := dm.downloadFile(task)
 		if err != nil {
 			dm.program.Send(TrackErrorMsg{Index: task.Index, Error: err.Error()})
+			// Drain the current MB result if it was started
+			if mbCh != nil {
+				<-mbCh
+			}
+			mbCh = nextMBCh
 			continue
+		}
+
+		// Wait for the current track's MB enrichment to finish (if started)
+		if mbCh != nil {
+			<-mbCh
+			// task.Metadata was mutated in-place by the goroutine via pointer
+		}
+
+		// Tag the downloaded file with metadata (now potentially enriched)
+		if tagErr := provider.TagAudioFile(task.FilePath, tasks[i].Metadata); tagErr != nil {
+			// Tagging failure is non-fatal -- the file is still playable
+			_ = tagErr
 		}
 
 		// Probe audio info
@@ -81,6 +141,9 @@ func (dm *DownloadManager) downloadAll(tasks []DownloadTask) {
 
 		// Send complete message with audio info
 		dm.program.Send(TrackCompleteMsg{Index: task.Index, AudioInfo: audioInfo})
+
+		// Shift the next MB channel to current for the next iteration
+		mbCh = nextMBCh
 	}
 
 	// Signal all downloads complete
@@ -116,7 +179,16 @@ func (dm *DownloadManager) downloadFile(task DownloadTask) error {
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
-	defer out.Close()
+
+	// Track whether the download completed successfully
+	downloadOK := false
+	defer func() {
+		out.Close()
+		if !downloadOK {
+			// Clean up partial file on failure or cancellation
+			os.Remove(task.FilePath)
+		}
+	}()
 
 	// Set up progress tracking
 	total := resp.ContentLength
@@ -126,7 +198,7 @@ func (dm *DownloadManager) downloadFile(task DownloadTask) error {
 	buffer := make([]byte, provider.DownloadBufferSize)
 
 	for {
-		if dm.model.Quitting {
+		if dm.model.IsQuitting() {
 			return fmt.Errorf("cancelled")
 		}
 
@@ -168,5 +240,6 @@ func (dm *DownloadManager) downloadFile(task DownloadTask) error {
 		}
 	}
 
+	downloadOK = true
 	return nil
 }

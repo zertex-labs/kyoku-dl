@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -14,27 +16,52 @@ type Track struct {
 	Duration  int // seconds
 	StreamURL string
 	MimeType  string
+
+	// Metadata for tagging
+	AlbumArtist string
+	TrackNumber int
+	TotalTracks int
+	DiscNumber  int
+	TotalDiscs  int
+	Date        string // release date (YYYY or YYYY-MM-DD)
+	Copyright   string
+	ISRC        string
+	CoverURL    string // URL to album cover art
+
+	// MusicBrainz enrichment (populated via --musicbrainz flag)
+	Genre                  string
+	MusicBrainzRecordingID string
+	MusicBrainzReleaseID   string
+	MusicBrainzArtistID    string
 }
 
 // Album represents a generic album from any music service.
 type Album struct {
-	ID     string
-	Title  string
-	Artist string
-	Tracks []Track
+	ID          string
+	Title       string
+	Artist      string
+	Tracks      []Track
+	Date        string // release date
+	TotalTracks int
+	TotalDiscs  int
+	CoverURL    string
 }
 
 // Config holds common application configuration.
 type Config struct {
-	Format string `json:"format"`
-	Debug  bool   `json:"debug"`
+	Format      string `json:"format"`
+	Debug       bool   `json:"debug"`
+	OutputDir   string `json:"output_dir,omitempty"`
+	Quality     string `json:"quality,omitempty"`
+	MusicBrainz bool   `json:"musicbrainz,omitempty"`
 }
 
 // DefaultConfig returns a default configuration.
 func DefaultConfig() Config {
 	return Config{
-		Format: "%artist% - %title%.%extension%",
-		Debug:  false,
+		Format:  "%artist%/%album%/%track% - %title%.%extension%",
+		Debug:   false,
+		Quality: "LOSSLESS",
 	}
 }
 
@@ -45,6 +72,9 @@ type Provider interface {
 
 	// MatchesURL returns true if the URL belongs to this service.
 	MatchesURL(url string) bool
+
+	// URLType returns the type of content the URL points to ("track", "album", or "").
+	URLType(url string) string
 
 	// IsAuthenticated checks if the provider has valid credentials.
 	IsAuthenticated() bool
@@ -118,7 +148,14 @@ func MimeToExtension(mimeType string) string {
 }
 
 // FormatFilename applies a format template to generate a filename.
-func FormatFilename(format string, track Track, extension string) string {
+// If outputDir is provided in the config, it is prepended to the path.
+//
+// Supported placeholders:
+//
+//	%artist%, %title%, %album%, %id%, %quality%, %extension%
+//	%track%  - zero-padded track number (e.g. "01")
+//	%disc%   - disc number
+func FormatFilename(format string, track Track, extension string, outputDir string) string {
 	filename := format
 
 	artist := track.Artist
@@ -142,6 +179,28 @@ func FormatFilename(format string, track Track, extension string) string {
 	filename = strings.ReplaceAll(filename, "%album%", SanitizeFilename(album))
 	filename = strings.ReplaceAll(filename, "%quality%", track.Quality)
 	filename = strings.ReplaceAll(filename, "%extension%", extension)
+
+	// Track number: zero-padded to 2 digits (or more if TotalTracks >= 100)
+	if track.TrackNumber > 0 {
+		pad := 2
+		if track.TotalTracks >= 100 {
+			pad = 3
+		}
+		filename = strings.ReplaceAll(filename, "%track%", fmt.Sprintf("%0*d", pad, track.TrackNumber))
+	} else {
+		filename = strings.ReplaceAll(filename, "%track%", "00")
+	}
+
+	// Disc number
+	if track.DiscNumber > 0 {
+		filename = strings.ReplaceAll(filename, "%disc%", fmt.Sprintf("%d", track.DiscNumber))
+	} else {
+		filename = strings.ReplaceAll(filename, "%disc%", "1")
+	}
+
+	if outputDir != "" {
+		filename = filepath.Join(outputDir, filename)
+	}
 
 	return filename
 }

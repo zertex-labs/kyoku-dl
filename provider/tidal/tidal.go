@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/zertex-labs/kyoku-dl/provider"
@@ -93,6 +94,17 @@ func (t *Tidal) MatchesURL(rawURL string) bool {
 	return trackPattern.MatchString(rawURL) || albumPattern.MatchString(rawURL)
 }
 
+// URLType returns the type of content the URL points to ("track", "album", or "").
+func (t *Tidal) URLType(rawURL string) string {
+	if trackPattern.MatchString(rawURL) {
+		return "track"
+	}
+	if albumPattern.MatchString(rawURL) {
+		return "album"
+	}
+	return ""
+}
+
 // IsAuthenticated checks if the provider has valid credentials.
 func (t *Tidal) IsAuthenticated() bool {
 	return t.auth.Token != "" && t.auth.Token != "YOUR_TIDAL_AUTH_TOKEN_HERE"
@@ -157,17 +169,29 @@ func (t *Tidal) GetAlbum(id string) (provider.Album, error) {
 		return provider.Album{}, fmt.Errorf("failed to get album tracks: %w", err)
 	}
 
-	// Convert to generic tracks
+	// Convert to generic tracks, enriching with album-level fields
 	genericTracks := make([]provider.Track, len(tracks))
 	for i, tr := range tracks {
-		genericTracks[i] = t.metadataToTrack(tr)
+		track := t.metadataToTrack(tr)
+		// Enrich with album-level data not available on TrackMetadata
+		track.Date = albumMeta.ReleaseDate
+		track.TotalDiscs = albumMeta.NumberOfVolumes
+		track.AlbumArtist = albumMeta.Artist.Name
+		if track.CoverURL == "" {
+			track.CoverURL = CoverURL(albumMeta.Cover, 1280)
+		}
+		genericTracks[i] = track
 	}
 
 	return provider.Album{
-		ID:     strconv.Itoa(albumMeta.ID),
-		Title:  albumMeta.Title,
-		Artist: albumMeta.Artist.Name,
-		Tracks: genericTracks,
+		ID:          strconv.Itoa(albumMeta.ID),
+		Title:       albumMeta.Title,
+		Artist:      albumMeta.Artist.Name,
+		Tracks:      genericTracks,
+		Date:        albumMeta.ReleaseDate,
+		TotalTracks: albumMeta.NumberOfTracks,
+		TotalDiscs:  albumMeta.NumberOfVolumes,
+		CoverURL:    CoverURL(albumMeta.Cover, 1280),
 	}, nil
 }
 
@@ -180,6 +204,9 @@ func (t *Tidal) GetStreamURL(trackID string) (string, error) {
 	}
 
 	quality := metadata.AudioQuality
+	if t.config.Quality != "" {
+		quality = t.config.Quality
+	}
 	if quality == "" {
 		quality = "LOSSLESS"
 	}
@@ -233,6 +260,18 @@ func (t *Tidal) DownloadTrack(tidalURL string) error {
 
 		track = t.metadataToTrack(metadata)
 
+		// Fetch album-level metadata for fields not on TrackMetadata
+		// (release date, total discs, album artist)
+		albumMeta, albumErr := t.getAlbumMetadata(strconv.Itoa(metadata.Album.ID))
+		if albumErr == nil {
+			track.Date = albumMeta.ReleaseDate
+			track.TotalDiscs = albumMeta.NumberOfVolumes
+			track.AlbumArtist = albumMeta.Artist.Name
+			if track.CoverURL == "" {
+				track.CoverURL = CoverURL(albumMeta.Cover, 1280)
+			}
+		}
+
 		// Get stream URL
 		var mimeType string
 		streamURL, mimeType, err = t.getStreamURLWithMime(trackID, metadata.AudioQuality)
@@ -247,7 +286,7 @@ func (t *Tidal) DownloadTrack(tidalURL string) error {
 		ext := provider.MimeToExtension(mimeType)
 
 		// Build filename
-		fileName = provider.FormatFilename(t.config.Format, track, ext)
+		fileName = provider.FormatFilename(t.config.Format, track, ext, t.config.OutputDir)
 
 		// Create track info for UI
 		trackInfo = ui.TrackInfo{
@@ -270,6 +309,7 @@ func (t *Tidal) DownloadTrack(tidalURL string) error {
 		TrackInfo: trackInfo,
 		StreamURL: streamURL,
 		FilePath:  fileName,
+		Metadata:  track,
 	}}
 
 	// Create and run download manager with TUI
@@ -330,13 +370,14 @@ func (t *Tidal) DownloadAlbum(tidalURL string) error {
 
 			ext := provider.MimeToExtension(mimeType)
 			track.Album = album.Title
-			fileName := provider.FormatFilename(t.config.Format, track, ext)
+			fileName := provider.FormatFilename(t.config.Format, track, ext, t.config.OutputDir)
 
 			tasks = append(tasks, ui.DownloadTask{
 				Index:     i,
 				TrackInfo: trackInfos[i],
 				StreamURL: streamURL,
 				FilePath:  fileName,
+				Metadata:  track,
 			})
 		}
 
@@ -507,6 +548,10 @@ func (t *Tidal) decodeManifest(playbackInfo PlaybackInfo) (StreamManifest, error
 }
 
 func (t *Tidal) getStreamURLWithMime(trackID, quality string) (string, string, error) {
+	// Config quality override takes precedence
+	if t.config.Quality != "" {
+		quality = t.config.Quality
+	}
 	if quality == "" {
 		quality = "LOSSLESS"
 	}
@@ -534,13 +579,32 @@ func (t *Tidal) getStreamURLWithMime(trackID, quality string) (string, string, e
 
 func (t *Tidal) metadataToTrack(m TrackMetadata) provider.Track {
 	return provider.Track{
-		ID:       strconv.Itoa(m.ID),
-		Title:    m.Title,
-		Artist:   m.Artist.Name,
-		Album:    m.Album.Title,
-		Quality:  m.AudioQuality,
-		Duration: m.Duration,
+		ID:          strconv.Itoa(m.ID),
+		Title:       m.Title,
+		Artist:      m.Artist.Name,
+		Album:       m.Album.Title,
+		AlbumArtist: m.Artist.Name,
+		Quality:     m.AudioQuality,
+		Duration:    m.Duration,
+		TrackNumber: m.TrackNumber,
+		TotalTracks: m.Album.NumberOfTracks,
+		DiscNumber:  m.VolumeNumber,
+		Copyright:   m.Copyright,
+		ISRC:        m.ISRC,
+		CoverURL:    CoverURL(m.Album.Cover, 1280),
 	}
+}
+
+// CoverURL builds a Tidal CDN URL for album cover art.
+// The cover ID is a UUID; dashes are replaced with slashes in the URL path.
+// Common sizes: 80, 160, 320, 640, 1280.
+func CoverURL(coverID string, size int) string {
+	if coverID == "" {
+		return ""
+	}
+	// Replace dashes with slashes: e7877e55-3f00-4f1c-b6e2-7bba3e2a7f1b -> e7877e55/3f00/4f1c/b6e2/7bba3e2a7f1b
+	path := strings.ReplaceAll(coverID, "-", "/")
+	return fmt.Sprintf("https://resources.tidal.com/images/%s/%dx%d.jpg", path, size, size)
 }
 
 // --- URL Parsing Helpers ---

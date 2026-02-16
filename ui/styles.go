@@ -31,6 +31,9 @@ var (
 	SuccessStyle = lipgloss.NewStyle().
 			Foreground(Success)
 
+	WarningStyle = lipgloss.NewStyle().
+			Foreground(Warning)
+
 	ErrorStyle = lipgloss.NewStyle().
 			Foreground(Error)
 )
@@ -73,6 +76,7 @@ var (
 const (
 	IconCheck    = "✓"
 	IconCross    = "✗"
+	IconSkip     = "→"
 	IconMusic    = "♫"
 	IconAlbum    = "💿"
 	IconDot      = "•"
