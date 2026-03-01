@@ -50,6 +50,8 @@ Format placeholders:
   %title%      Track title
   %track%      Track number (zero-padded)
   %disc%       Disc number
+  %year%       Release year (e.g. "2024")
+  %date%       Full release date (e.g. "2024-01-15")
   %id%         Track ID
   %quality%    Audio quality
   %extension%  File extension

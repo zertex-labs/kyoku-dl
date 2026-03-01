@@ -105,10 +105,17 @@ func EnsureConfigDir() error {
 }
 
 // loadConfig reads the config file and returns the configuration.
-// Returns default config if the file doesn't exist or is invalid.
+// If the file doesn't exist, creates it with default values.
+// Returns default config if the file is invalid.
 func loadConfig(path string) provider.Config {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			// Create config file with defaults
+			if err := createDefaultConfig(path); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not create default config: %v\n", err)
+			}
+		}
 		return provider.DefaultConfig()
 	}
 
@@ -124,4 +131,35 @@ func loadConfig(path string) provider.Config {
 	}
 
 	return config
+}
+
+// createDefaultConfig creates a config file with default values.
+func createDefaultConfig(path string) error {
+	// Ensure the directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	config := provider.DefaultConfig()
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Created default config at %s\n", path)
+	return nil
+}
+
+// ensureDefaultConfig creates the config file with defaults if it doesn't exist.
+func ensureDefaultConfig() {
+	if _, err := os.Stat(cfgFile); os.IsNotExist(err) {
+		if err := createDefaultConfig(cfgFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not create default config: %v\n", err)
+		}
+	}
 }

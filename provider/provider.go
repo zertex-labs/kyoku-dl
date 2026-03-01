@@ -155,6 +155,8 @@ func MimeToExtension(mimeType string) string {
 //	%artist%, %title%, %album%, %id%, %quality%, %extension%
 //	%track%  - zero-padded track number (e.g. "01")
 //	%disc%   - disc number
+//	%year%   - release year (e.g. "2024")
+//	%date%   - full release date (e.g. "2024-01-15")
 func FormatFilename(format string, track Track, extension string, outputDir string) string {
 	filename := format
 
@@ -196,6 +198,20 @@ func FormatFilename(format string, track Track, extension string, outputDir stri
 		filename = strings.ReplaceAll(filename, "%disc%", fmt.Sprintf("%d", track.DiscNumber))
 	} else {
 		filename = strings.ReplaceAll(filename, "%disc%", "1")
+	}
+
+	// Date and year
+	if track.Date != "" {
+		filename = strings.ReplaceAll(filename, "%date%", track.Date)
+		// Extract year (first 4 characters if available)
+		year := track.Date
+		if len(track.Date) >= 4 {
+			year = track.Date[:4]
+		}
+		filename = strings.ReplaceAll(filename, "%year%", year)
+	} else {
+		filename = strings.ReplaceAll(filename, "%date%", "Unknown")
+		filename = strings.ReplaceAll(filename, "%year%", "Unknown")
 	}
 
 	if outputDir != "" {

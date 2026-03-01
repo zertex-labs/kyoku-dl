@@ -43,6 +43,9 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("could not create config directory: %w", err)
 	}
 
+	// Create default config if it doesn't exist so users know it's there
+	ensureDefaultConfig()
+
 	auth, err := tidal.DeviceLogin()
 	if err != nil {
 		return fmt.Errorf("login failed: %w", err)
