@@ -28,6 +28,7 @@ var (
 	format      string
 	quality     string
 	musicbrainz bool
+	inputFile   string
 )
 
 var downloadCmd = &cobra.Command{
@@ -56,8 +57,13 @@ Format placeholders:
   %quality%    Audio quality
   %extension%  File extension
 
-Default format: %artist%/%album%/%track% - %title%.%extension%`,
-	Args: cobra.MinimumNArgs(1),
+Default format: %artist%/%album%/%track% - %title%.%extension%
+
+You can also provide URLs via a file using the -i flag:
+  kyoku-dl download -i urls.txt
+
+The file should contain URLs separated by whitespace (spaces, tabs, or newlines).`,
+	Args: cobra.ArbitraryArgs,
 	RunE: runDownload,
 }
 
@@ -66,9 +72,27 @@ func init() {
 	downloadCmd.Flags().StringVarP(&format, "format", "f", "", "filename format template (overrides config)")
 	downloadCmd.Flags().StringVarP(&quality, "quality", "q", "", "audio quality: normal, high, lossless, master, hires")
 	downloadCmd.Flags().BoolVarP(&musicbrainz, "musicbrainz", "m", false, "enrich metadata with genre and MusicBrainz IDs via ISRC lookup")
+	downloadCmd.Flags().StringVarP(&inputFile, "input-file", "i", "", "file containing URLs separated by whitespace")
 }
 
 func runDownload(cmd *cobra.Command, args []string) error {
+	// Collect URLs from args and input file
+	urls := append([]string{}, args...)
+
+	if inputFile != "" {
+		data, err := os.ReadFile(inputFile)
+		if err != nil {
+			return fmt.Errorf("failed to read input file: %w", err)
+		}
+		// Split by whitespace (spaces, tabs, newlines)
+		fileURLs := strings.Fields(string(data))
+		urls = append(urls, fileURLs...)
+	}
+
+	if len(urls) == 0 {
+		return fmt.Errorf("no URLs provided; specify URLs as arguments or use -i/--input-file")
+	}
+
 	// Check for ffprobe
 	checkFfprobe()
 
@@ -122,7 +146,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 
 	// Process each URL
 	var errors []string
-	for _, url := range args {
+	for _, url := range urls {
 		select {
 		case <-ctx.Done():
 			fmt.Fprintf(os.Stderr, "\nInterrupted, stopping downloads...\n")
