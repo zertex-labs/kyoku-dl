@@ -26,17 +26,19 @@ const (
 
 // TrackInfo holds information about a track being downloaded
 type TrackInfo struct {
-	ID         string
-	Title      string
-	Artist     string
-	Album      string
-	Status     TrackStatus
-	Progress   float64
-	Size       int64
-	Downloaded int64
-	Speed      float64
-	Error      string
-	AudioInfo  *provider.AudioInfo // Audio metadata after download
+	ID               string
+	Title            string
+	Artist           string
+	Album            string
+	Status           TrackStatus
+	Progress         float64
+	Size             int64
+	Downloaded       int64
+	Speed            float64
+	Error            string
+	AudioInfo        *provider.AudioInfo // Audio metadata after download
+	RequestedQuality string              // Quality that was requested (e.g., "HI_RES_LOSSLESS")
+	ActualQuality    string              // Quality actually returned by the service
 }
 
 // DownloadModel is the bubbletea model for the download UI
@@ -304,6 +306,18 @@ func (m *DownloadModel) renderTrack(b *strings.Builder, index int, track TrackIn
 	// First line: status, number, title
 	line := fmt.Sprintf("%s %s %s", status, num, title)
 
+	// Show quality info with warning if downgraded
+	if track.ActualQuality != "" {
+		qualityStr := formatQuality(track.ActualQuality)
+		if track.RequestedQuality != "" && track.RequestedQuality != track.ActualQuality {
+			// Quality was downgraded - show warning
+			line += " " + WarningStyle.Render(IconWarning+" "+qualityStr)
+		} else {
+			// Quality matches or no requested quality specified
+			line += " " + MutedStyle.Render("["+qualityStr+"]")
+		}
+	}
+
 	// If downloading, show progress on same line
 	if track.Status == StatusDownloading {
 		progressBar := RenderProgressBar(track.Progress, 20)
@@ -367,6 +381,22 @@ func (m *DownloadModel) renderTrack(b *strings.Builder, index int, track TrackIn
 	b.WriteString(line + "\n")
 
 	return completed
+}
+
+// formatQuality converts TIDAL quality constants to human-readable format
+func formatQuality(quality string) string {
+	switch quality {
+	case "HI_RES_LOSSLESS":
+		return "Hi-Res"
+	case "LOSSLESS":
+		return "Lossless"
+	case "HIGH":
+		return "High"
+	case "LOW":
+		return "Low"
+	default:
+		return quality
+	}
 }
 
 // Helper functions

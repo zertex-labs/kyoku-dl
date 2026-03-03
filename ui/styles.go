@@ -82,6 +82,7 @@ const (
 	IconDot      = "•"
 	IconProgress = "█"
 	IconEmpty    = "░"
+	IconWarning  = "⚠"
 )
 
 // RenderProgressBar renders a progress bar with the given percentage and width.

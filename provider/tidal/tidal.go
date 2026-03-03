@@ -273,27 +273,29 @@ func (t *Tidal) DownloadTrack(tidalURL string) error {
 		}
 
 		// Get stream URL
-		var mimeType string
-		streamURL, mimeType, err = t.getStreamURLWithMime(trackID, metadata.AudioQuality)
+		streamInfo, err := t.getStreamInfo(trackID, metadata.AudioQuality)
 		if err != nil {
 			return fmt.Errorf("failed to get stream URL: %w", err)
 		}
 
-		track.StreamURL = streamURL
-		track.MimeType = mimeType
+		streamURL = streamInfo.URL
+		track.StreamURL = streamInfo.URL
+		track.MimeType = streamInfo.MimeType
 
 		// Determine extension
-		ext := provider.MimeToExtension(mimeType)
+		ext := provider.MimeToExtension(streamInfo.MimeType)
 
 		// Build filename
 		fileName = provider.FormatFilename(t.config.Format, track, ext, t.config.OutputDir)
 
 		// Create track info for UI
 		trackInfo = ui.TrackInfo{
-			ID:     track.ID,
-			Title:  track.Title,
-			Artist: track.Artist,
-			Album:  track.Album,
+			ID:               track.ID,
+			Title:            track.Title,
+			Artist:           track.Artist,
+			Album:            track.Album,
+			RequestedQuality: streamInfo.RequestedQuality,
+			ActualQuality:    streamInfo.ActualQuality,
 		}
 
 		return nil
@@ -353,29 +355,37 @@ func (t *Tidal) DownloadAlbum(tidalURL string) error {
 		tasks = make([]ui.DownloadTask, 0, len(album.Tracks))
 
 		for i, track := range album.Tracks {
-			trackInfos[i] = ui.TrackInfo{
-				ID:     track.ID,
-				Title:  track.Title,
-				Artist: track.Artist,
-				Album:  album.Title,
-			}
-
 			// Get stream URL for each track
-			streamURL, mimeType, err := t.getStreamURLWithMime(track.ID, track.Quality)
+			streamInfo, err := t.getStreamInfo(track.ID, track.Quality)
 			if err != nil {
-				trackInfos[i].Status = ui.StatusError
-				trackInfos[i].Error = err.Error()
+				trackInfos[i] = ui.TrackInfo{
+					ID:     track.ID,
+					Title:  track.Title,
+					Artist: track.Artist,
+					Album:  album.Title,
+					Status: ui.StatusError,
+					Error:  err.Error(),
+				}
 				continue
 			}
 
-			ext := provider.MimeToExtension(mimeType)
+			trackInfos[i] = ui.TrackInfo{
+				ID:               track.ID,
+				Title:            track.Title,
+				Artist:           track.Artist,
+				Album:            album.Title,
+				RequestedQuality: streamInfo.RequestedQuality,
+				ActualQuality:    streamInfo.ActualQuality,
+			}
+
+			ext := provider.MimeToExtension(streamInfo.MimeType)
 			track.Album = album.Title
 			fileName := provider.FormatFilename(t.config.Format, track, ext, t.config.OutputDir)
 
 			tasks = append(tasks, ui.DownloadTask{
 				Index:     i,
 				TrackInfo: trackInfos[i],
-				StreamURL: streamURL,
+				StreamURL: streamInfo.URL,
 				FilePath:  fileName,
 				Metadata:  track,
 			})
@@ -547,34 +557,48 @@ func (t *Tidal) decodeManifest(playbackInfo PlaybackInfo) (StreamManifest, error
 	return manifest, nil
 }
 
-func (t *Tidal) getStreamURLWithMime(trackID, quality string) (string, string, error) {
+// StreamInfo holds stream URL, MIME type, and quality information
+type StreamInfo struct {
+	URL              string
+	MimeType         string
+	RequestedQuality string
+	ActualQuality    string
+}
+
+func (t *Tidal) getStreamInfo(trackID, quality string) (StreamInfo, error) {
 	// Config quality override takes precedence
+	requestedQuality := quality
 	if t.config.Quality != "" {
-		quality = t.config.Quality
+		requestedQuality = t.config.Quality
 	}
-	if quality == "" {
-		quality = "LOSSLESS"
+	if requestedQuality == "" {
+		requestedQuality = "LOSSLESS"
 	}
 
-	playbackInfo, err := t.getPlaybackInfo(trackID, quality)
+	playbackInfo, err := t.getPlaybackInfo(trackID, requestedQuality)
 	if err != nil {
-		return "", "", err
+		return StreamInfo{}, err
 	}
 
 	manifest, err := t.decodeManifest(playbackInfo)
 	if err != nil {
-		return "", "", err
+		return StreamInfo{}, err
 	}
 
 	if manifest.EncryptionType != "NONE" {
-		return "", "", fmt.Errorf("stream is encrypted (type: %s)", manifest.EncryptionType)
+		return StreamInfo{}, fmt.Errorf("stream is encrypted (type: %s)", manifest.EncryptionType)
 	}
 
 	if len(manifest.URLs) == 0 {
-		return "", "", fmt.Errorf("no stream URLs found in manifest")
+		return StreamInfo{}, fmt.Errorf("no stream URLs found in manifest")
 	}
 
-	return manifest.URLs[0], manifest.MimeType, nil
+	return StreamInfo{
+		URL:              manifest.URLs[0],
+		MimeType:         manifest.MimeType,
+		RequestedQuality: requestedQuality,
+		ActualQuality:    playbackInfo.AudioQuality,
+	}, nil
 }
 
 func (t *Tidal) metadataToTrack(m TrackMetadata) provider.Track {
