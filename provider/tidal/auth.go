@@ -28,7 +28,8 @@ type clientCredentials struct {
 // These are extracted from Tidal apps and used by various open-source tools.
 // If one is revoked, the next is attempted automatically.
 var knownClients = []clientCredentials{
-	{ID: "zU4XHVVkc2tDPo4t", Secret: "VJKhDFqJPqvsPVNBV6ukXTJmwlvbttP7wlMlrc72se4="}, // streamrip
+	{ID: "mRAETZku02e8Sl6O", Secret: "xLcbVdJDyj7VZPX8wZtlccwxbWakMhmn9zMDM4YZFPg="}, // hero-hl (private; xrexy)
+	{ID: "fX2JxdmntZWK0ixT", Secret: "1Nm5AfDAjxrgJFJbKNWLeAyKGVGmINuXPPLHVXAvxAg="}, // streamrip (new)
 	{ID: "4N3n6Q1x95LL5K7p", Secret: "oKOXfJW371cX6xaZ0PyhgGNBdNLlBZd4AKKYougMjik="}, // orpheusdl (TV)
 	{ID: "cgiF7TQuB97BUIu3", Secret: "1nqpgx8uvBdZigrx4hUPDV2hOwgYAAAG5DYXOr6uNf8="}, // orpheusdl (alt)
 }
