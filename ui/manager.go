@@ -30,11 +30,12 @@ func NewDownloadManager(title, artist, providerName string, isAlbum bool, tracks
 
 // DownloadTask represents a single download task
 type DownloadTask struct {
-	Index     int
-	TrackInfo TrackInfo
-	StreamURL string
-	FilePath  string
-	Metadata  provider.Track // Full track metadata for tagging
+	Index      int
+	TrackInfo  TrackInfo
+	StreamURL  string
+	StreamURLs []string // All segment URLs for DASH streams (init + media segments)
+	FilePath   string
+	Metadata   provider.Track // Full track metadata for tagging
 }
 
 // Run starts the TUI and downloads
@@ -151,24 +152,6 @@ func (dm *DownloadManager) downloadAll(tasks []DownloadTask) {
 }
 
 func (dm *DownloadManager) downloadFile(task DownloadTask) error {
-	// Create HTTP request
-	req, err := provider.NewDownloadRequest(task.StreamURL)
-	if err != nil {
-		return err
-	}
-
-	client := provider.NewHTTPClient()
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to fetch stream: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("download failed with status: %s", resp.Status)
-	}
-
 	// Create directory structure if needed
 	if err := provider.EnsureDirectory(task.FilePath); err != nil {
 		return err
@@ -185,59 +168,98 @@ func (dm *DownloadManager) downloadFile(task DownloadTask) error {
 	defer func() {
 		out.Close()
 		if !downloadOK {
-			// Clean up partial file on failure or cancellation
 			os.Remove(task.FilePath)
 		}
 	}()
 
-	// Set up progress tracking
-	total := resp.ContentLength
+	// Determine which URLs to download.
+	// For DASH streams, StreamURLs contains all segments (init + media).
+	// For single-URL streams, fall back to StreamURL.
+	urls := task.StreamURLs
+	if len(urls) == 0 {
+		urls = []string{task.StreamURL}
+	}
+
+	client := provider.NewHTTPClient()
 	var written int64
 	startTime := time.Now()
 	lastUpdate := time.Now()
 	buffer := make([]byte, provider.DownloadBufferSize)
+	totalSegments := int64(len(urls))
 
-	for {
+	for segIdx, segURL := range urls {
 		if dm.model.IsQuitting() {
 			return fmt.Errorf("cancelled")
 		}
 
-		n, readErr := resp.Body.Read(buffer)
-		if n > 0 {
-			_, writeErr := out.Write(buffer[:n])
-			if writeErr != nil {
-				return fmt.Errorf("failed to write: %w", writeErr)
-			}
-			atomic.AddInt64(&written, int64(n))
+		req, err := provider.NewDownloadRequest(segURL)
+		if err != nil {
+			return fmt.Errorf("segment %d: %w", segIdx, err)
+		}
 
-			// Update progress every 100ms
-			now := time.Now()
-			if now.Sub(lastUpdate) >= 100*time.Millisecond {
-				lastUpdate = now
-				elapsed := now.Sub(startTime).Seconds()
-				if elapsed > 0 {
-					speed := float64(written) / elapsed
-					progress := float64(0)
-					if total > 0 {
-						progress = float64(written) / float64(total) * 100
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("segment %d: failed to fetch: %w", segIdx, err)
+		}
+
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			return fmt.Errorf("segment %d: download failed with status: %s", segIdx, resp.Status)
+		}
+
+		// For single-URL streams, use Content-Length for accurate progress.
+		// For multi-segment, total is unknown; we track segment progress instead.
+		singleTotal := resp.ContentLength
+
+		for {
+			if dm.model.IsQuitting() {
+				resp.Body.Close()
+				return fmt.Errorf("cancelled")
+			}
+
+			n, readErr := resp.Body.Read(buffer)
+			if n > 0 {
+				_, writeErr := out.Write(buffer[:n])
+				if writeErr != nil {
+					resp.Body.Close()
+					return fmt.Errorf("segment %d: failed to write: %w", segIdx, writeErr)
+				}
+				atomic.AddInt64(&written, int64(n))
+
+				now := time.Now()
+				if now.Sub(lastUpdate) >= 100*time.Millisecond {
+					lastUpdate = now
+					elapsed := now.Sub(startTime).Seconds()
+					if elapsed > 0 {
+						speed := float64(written) / elapsed
+						var progress float64
+						if totalSegments == 1 && singleTotal > 0 {
+							// Single URL: byte-level progress
+							progress = float64(written) / float64(singleTotal) * 100
+						} else {
+							// Multi-segment: estimate by segment index + fraction
+							progress = float64(segIdx) / float64(totalSegments) * 100
+						}
+						dm.program.Send(TrackProgressMsg{
+							Index:      task.Index,
+							Progress:   progress,
+							Downloaded: written,
+							Size:       singleTotal,
+							Speed:      speed,
+						})
 					}
-					dm.program.Send(TrackProgressMsg{
-						Index:      task.Index,
-						Progress:   progress,
-						Downloaded: written,
-						Size:       total,
-						Speed:      speed,
-					})
 				}
 			}
-		}
 
-		if readErr == io.EOF {
-			break
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				resp.Body.Close()
+				return fmt.Errorf("segment %d: failed to read: %w", segIdx, readErr)
+			}
 		}
-		if readErr != nil {
-			return fmt.Errorf("failed to read: %w", readErr)
-		}
+		resp.Body.Close()
 	}
 
 	downloadOK = true

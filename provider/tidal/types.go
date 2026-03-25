@@ -1,5 +1,7 @@
 package tidal
 
+import "encoding/xml"
+
 // --- Tidal API Response Types ---
 
 // Artist represents a Tidal artist in API responses.
@@ -84,4 +86,55 @@ type Auth struct {
 	ExpiresAt    int64  `json:"expires_at"`
 	UserID       string `json:"user_id"`
 	CountryCode  string `json:"country_code"`
+}
+
+// --- DASH MPD Types ---
+
+// MPD is the root element of a DASH Media Presentation Description.
+type MPD struct {
+	XMLName xml.Name    `xml:"MPD"`
+	Periods []MPDPeriod `xml:"Period"`
+}
+
+// MPDPeriod represents a Period element in an MPD.
+type MPDPeriod struct {
+	AdaptationSets []MPDAdaptationSet `xml:"AdaptationSet"`
+}
+
+// MPDAdaptationSet represents an AdaptationSet element in an MPD.
+type MPDAdaptationSet struct {
+	MimeType        string              `xml:"mimeType,attr"`
+	ContentType     string              `xml:"contentType,attr"`
+	Representations []MPDRepresentation `xml:"Representation"`
+}
+
+// MPDRepresentation represents a Representation element in an MPD.
+type MPDRepresentation struct {
+	ID                string              `xml:"id,attr"`
+	Codecs            string              `xml:"codecs,attr"`
+	Bandwidth         int                 `xml:"bandwidth,attr"`
+	AudioSamplingRate string              `xml:"audioSamplingRate,attr"`
+	BaseURLs          []string            `xml:"BaseURL"`
+	SegmentTemplate   *MPDSegmentTemplate `xml:"SegmentTemplate"`
+}
+
+// MPDSegmentTemplate represents a SegmentTemplate element in an MPD.
+type MPDSegmentTemplate struct {
+	Initialization string              `xml:"initialization,attr"`
+	Media          string              `xml:"media,attr"`
+	StartNumber    int                 `xml:"startNumber,attr"`
+	Timescale      int                 `xml:"timescale,attr"`
+	Timeline       *MPDSegmentTimeline `xml:"SegmentTimeline"`
+}
+
+// MPDSegmentTimeline represents a SegmentTimeline element in an MPD.
+type MPDSegmentTimeline struct {
+	Segments []MPDSegment `xml:"S"`
+}
+
+// MPDSegment represents an S element within SegmentTimeline.
+type MPDSegment struct {
+	D int `xml:"d,attr"` // duration
+	R int `xml:"r,attr"` // repeat count
+	T int `xml:"t,attr"` // time
 }

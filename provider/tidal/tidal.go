@@ -3,6 +3,7 @@ package tidal
 import (
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -249,6 +250,7 @@ func (t *Tidal) DownloadTrack(tidalURL string) error {
 	// Fetch track metadata with loading spinner
 	var track provider.Track
 	var streamURL, fileName string
+	var streamURLs []string
 	var trackInfo ui.TrackInfo
 
 	err := ui.RunLoading("Fetching track metadata...", func() error {
@@ -279,6 +281,7 @@ func (t *Tidal) DownloadTrack(tidalURL string) error {
 		}
 
 		streamURL = streamInfo.URL
+		streamURLs = streamInfo.URLs
 		track.StreamURL = streamInfo.URL
 		track.MimeType = streamInfo.MimeType
 
@@ -307,11 +310,12 @@ func (t *Tidal) DownloadTrack(tidalURL string) error {
 
 	// Create download task
 	tasks := []ui.DownloadTask{{
-		Index:     0,
-		TrackInfo: trackInfo,
-		StreamURL: streamURL,
-		FilePath:  fileName,
-		Metadata:  track,
+		Index:      0,
+		TrackInfo:  trackInfo,
+		StreamURL:  streamURL,
+		StreamURLs: streamURLs,
+		FilePath:   fileName,
+		Metadata:   track,
 	}}
 
 	// Create and run download manager with TUI
@@ -383,11 +387,12 @@ func (t *Tidal) DownloadAlbum(tidalURL string) error {
 			fileName := provider.FormatFilename(t.config.Format, track, ext, t.config.OutputDir)
 
 			tasks = append(tasks, ui.DownloadTask{
-				Index:     i,
-				TrackInfo: trackInfos[i],
-				StreamURL: streamInfo.URL,
-				FilePath:  fileName,
-				Metadata:  track,
+				Index:      i,
+				TrackInfo:  trackInfos[i],
+				StreamURL:  streamInfo.URL,
+				StreamURLs: streamInfo.URLs,
+				FilePath:   fileName,
+				Metadata:   track,
 			})
 		}
 
@@ -549,17 +554,111 @@ func (t *Tidal) decodeManifest(playbackInfo PlaybackInfo) (StreamManifest, error
 		return StreamManifest{}, fmt.Errorf("failed to base64 decode manifest: %w", err)
 	}
 
-	var manifest StreamManifest
-	if err := json.Unmarshal(decoded, &manifest); err != nil {
-		return StreamManifest{}, fmt.Errorf("failed to parse manifest JSON: %w", err)
+	switch playbackInfo.ManifestMimeType {
+	case "application/dash+xml":
+		return parseDASHManifest(decoded)
+	default:
+		// Default: BTS JSON manifest (application/vnd.tidal.bts)
+		var manifest StreamManifest
+		if err := json.Unmarshal(decoded, &manifest); err != nil {
+			return StreamManifest{}, fmt.Errorf("failed to parse manifest JSON: %w", err)
+		}
+		return manifest, nil
 	}
-
-	return manifest, nil
 }
 
-// StreamInfo holds stream URL, MIME type, and quality information
+// parseDASHManifest extracts stream URLs and metadata from a DASH MPD manifest.
+// Tidal's HI_RES_LOSSLESS MPD uses SegmentTemplate with initialization/media
+// attributes and a SegmentTimeline to define numbered segments. This function
+// builds the full ordered list of segment URLs: init segment first, then all
+// numbered media segments derived from the timeline.
+func parseDASHManifest(data []byte) (StreamManifest, error) {
+	var mpd MPD
+	if err := xml.Unmarshal(data, &mpd); err != nil {
+		return StreamManifest{}, fmt.Errorf("failed to parse DASH manifest XML: %w", err)
+	}
+
+	var urls []string
+	var mimeType, codecs string
+
+	for _, period := range mpd.Periods {
+		for _, adaptSet := range period.AdaptationSets {
+			for _, rep := range adaptSet.Representations {
+				// Capture codec and mime info from the first representation
+				if codecs == "" && rep.Codecs != "" {
+					codecs = rep.Codecs
+				}
+				if mimeType == "" && adaptSet.MimeType != "" {
+					mimeType = adaptSet.MimeType
+				}
+
+				// Try SegmentTemplate first (Tidal HI_RES_LOSSLESS uses this)
+				if rep.SegmentTemplate != nil {
+					tmpl := rep.SegmentTemplate
+
+					// Add initialization segment URL
+					if tmpl.Initialization != "" {
+						urls = append(urls, tmpl.Initialization)
+					}
+
+					// Compute segment count from SegmentTimeline
+					if tmpl.Media != "" && tmpl.Timeline != nil {
+						startNum := tmpl.StartNumber
+						segNum := startNum
+						for _, s := range tmpl.Timeline.Segments {
+							// Each <S> element represents 1 + r segments
+							count := 1 + s.R
+							for i := 0; i < count; i++ {
+								segURL := strings.Replace(tmpl.Media, "$Number$", strconv.Itoa(segNum), 1)
+								urls = append(urls, segURL)
+								segNum++
+							}
+						}
+					}
+				}
+
+				// Fallback: collect BaseURLs (direct download URLs)
+				if len(urls) == 0 {
+					for _, baseURL := range rep.BaseURLs {
+						if baseURL != "" {
+							urls = append(urls, baseURL)
+						}
+					}
+				}
+
+				// Use only the first representation that yields URLs
+				if len(urls) > 0 {
+					break
+				}
+			}
+			if len(urls) > 0 {
+				break
+			}
+		}
+		if len(urls) > 0 {
+			break
+		}
+	}
+
+	if len(urls) == 0 {
+		return StreamManifest{}, fmt.Errorf("no stream URLs found in DASH manifest")
+	}
+
+	return StreamManifest{
+		MimeType:       mimeType,
+		Codecs:         codecs,
+		EncryptionType: "NONE",
+		URLs:           urls,
+	}, nil
+}
+
+// StreamInfo holds stream URL, MIME type, and quality information.
+// For DASH streams, URLs contains all segment URLs (init + media segments)
+// that must be downloaded and concatenated in order.
+// URL is always set to the first URL for backwards compatibility.
 type StreamInfo struct {
 	URL              string
+	URLs             []string
 	MimeType         string
 	RequestedQuality string
 	ActualQuality    string
@@ -595,6 +694,7 @@ func (t *Tidal) getStreamInfo(trackID, quality string) (StreamInfo, error) {
 
 	return StreamInfo{
 		URL:              manifest.URLs[0],
+		URLs:             manifest.URLs,
 		MimeType:         manifest.MimeType,
 		RequestedQuality: requestedQuality,
 		ActualQuality:    playbackInfo.AudioQuality,
