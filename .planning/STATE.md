@@ -1,10 +1,10 @@
 # State
 
 ## Current Phase
-Phase 02: Deezer Hardening — Plan 4 of 4
+Phase 02: Deezer Hardening — Complete (4/4 plans)
 
 ## Progress
-[=====================         ] 6/7 plans complete (86%)
+[==============================] 7/7 plans complete (100%)
 
 ## Decisions
 - Use ARL cookie auth (same as deemix/d-fi, no OAuth)
@@ -34,6 +34,7 @@ Phase 02: Deezer Hardening — Plan 4 of 4
 - [02-03] Single retry for download failures — sufficient for transient network issues
 - [02-03] 20KB threshold for small response detection — error pages always smaller than audio
 - [02-03] Bounded FALLBACK recursion via SNG_ID equality check
+- [02-04] Genre extracted from album Genres.Data[0].Name, copyright from GWSongData.COPYRIGHT via StreamInfo
 
 ## Blockers
 None
@@ -48,7 +49,8 @@ None
 | 02-01      | 3min     | 1     | 2     |
 | 02-02      | 5min     | 2     | 3     |
 | 02-03      | 4min     | 2     | 2     |
+| 02-04      | 5min     | 1     | 2     |
 
 ## Last Session
-- **Stopped at:** Completed 02-02-PLAN.md
-- **Resume:** Ready for 02-04-PLAN.md
+- **Stopped at:** Completed 02-04-PLAN.md (Phase 02 complete)
+- **Resume:** Phase 02 Deezer Hardening fully complete. Ready for next phase.

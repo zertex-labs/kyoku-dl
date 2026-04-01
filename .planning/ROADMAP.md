@@ -39,10 +39,10 @@ Plans:
 - HARD-10: Genre extraction — map AlbumResponse.Genres to track metadata
 - HARD-11: Copyright mapping — map GWSongData.COPYRIGHT to Track.Copyright
 
-**Plans:** 2/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [x] 02-01-PLAN.md — Persistent HTTP session, browser UA, timeout increase
-- [ ] 02-02-PLAN.md — CSRF auto-refresh, rate limiting, license pre-check
-- [ ] 02-03-PLAN.md — Download retry, small response detection, FALLBACK support
-- [ ] 02-04-PLAN.md — Genre extraction, copyright mapping, metadata completeness
+- [x] 02-02-PLAN.md — CSRF auto-refresh, rate limiting, license pre-check
+- [x] 02-03-PLAN.md — Download retry, small response detection, FALLBACK support
+- [x] 02-04-PLAN.md — Genre extraction, copyright mapping, metadata completeness
