@@ -201,6 +201,58 @@ func (d *Deezer) InitSessionFromARL(arl string) error {
 	return nil
 }
 
+// refreshCSRFToken re-fetches the CSRF token (checkForm) by calling deezer.getUserData
+// using the persistent HTTP client's cookie jar (which already has the ARL cookie).
+// It also refreshes the license token and capability flags while at it.
+// If the ARL itself is expired (getUserData returns USER_ID 0), this returns an error.
+func (d *Deezer) refreshCSRFToken() error {
+	apiURL := "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData&input=3&api_version=1.0&api_token="
+
+	req, err := http.NewRequest("POST", apiURL, strings.NewReader("{}"))
+	if err != nil {
+		return fmt.Errorf("failed to create getUserData request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", browserUA)
+
+	resp, err := d.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to call getUserData: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read getUserData response: %w", err)
+	}
+
+	var gwResp GWResponse
+	if err := json.Unmarshal(body, &gwResp); err != nil {
+		return fmt.Errorf("failed to parse getUserData response: %w", err)
+	}
+
+	var userData GWUserData
+	if err := json.Unmarshal(gwResp.Results, &userData); err != nil {
+		return fmt.Errorf("failed to parse user data: %w", err)
+	}
+
+	if userData.USER.USER_ID == 0 {
+		return fmt.Errorf("ARL expired — cannot refresh CSRF token")
+	}
+
+	// Update auth tokens and capability flags
+	d.auth.APIToken = userData.CheckForm
+	d.auth.LicenseToken = userData.USER.OPTIONS.LicenseToken
+	d.auth.CanStreamLossless = userData.USER.OPTIONS.WebLossless
+	d.auth.CanStreamHQ = userData.USER.OPTIONS.WebHQ
+
+	if d.debug {
+		fmt.Fprintf(os.Stderr, "DEBUG: Refreshed CSRF token (checkForm) and license token\n")
+	}
+
+	return nil
+}
+
 // EnsureAuth checks the current auth state. If a valid ARL exists, it re-initializes
 // the session (since Deezer sessions expire). If no ARL is present, it prompts
 // the user to provide one interactively. The auth is saved to disk.

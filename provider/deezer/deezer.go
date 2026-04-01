@@ -3,6 +3,7 @@ package deezer
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -193,12 +194,20 @@ func (d *Deezer) GetAlbum(id string) (provider.Album, error) {
 
 	// Convert tracks
 	tracks := make([]provider.Track, len(resp.Tracks.Data))
+
+	// Extract primary genre from album
+	albumGenre := ""
+	if len(resp.Genres.Data) > 0 {
+		albumGenre = resp.Genres.Data[0].Name
+	}
+
 	for i, t := range resp.Tracks.Data {
 		track := d.metadataToTrack(t)
 		// Enrich with album-level data
 		track.Date = resp.ReleaseDate
 		track.AlbumArtist = resp.Artist.Name
 		track.TotalTracks = resp.NbTracks
+		track.Genre = albumGenre
 		if track.Album == "" {
 			track.Album = resp.Title
 		}
@@ -227,6 +236,17 @@ type StreamInfo struct {
 	SongData         GWSongData
 	RequestedQuality string
 	ActualQuality    string
+	Copyright        string
+}
+
+// GeoRestrictedError indicates a track is geo-restricted (media API error code 2002).
+type GeoRestrictedError struct {
+	Code    int
+	Message string
+}
+
+func (e *GeoRestrictedError) Error() string {
+	return fmt.Sprintf("geo-restricted (code %d): %s", e.Code, e.Message)
 }
 
 // GetStreamURL returns the direct stream URL for a track.
@@ -625,7 +645,19 @@ func (d *Deezer) getStreamURL(trackID, quality string, songData GWSongData) (Str
 				SongData:         songData,
 				RequestedQuality: quality,
 				ActualQuality:    actualQuality,
+				Copyright:        songData.COPYRIGHT,
 			}, nil
+		}
+		// Check for geo-restriction — try FALLBACK track if available
+		var geoErr *GeoRestrictedError
+		if errors.As(err, &geoErr) && songData.FALLBACK.SNG_ID != "" && songData.FALLBACK.SNG_ID != songData.SNG_ID {
+			if d.debug {
+				fmt.Fprintf(os.Stderr, "Track %s geo-restricted, trying FALLBACK %s\n", songData.SNG_ID, songData.FALLBACK.SNG_ID)
+			}
+			fallbackData, fbErr := d.getSongData(songData.FALLBACK.SNG_ID)
+			if fbErr == nil {
+				return d.getStreamURL(songData.FALLBACK.SNG_ID, quality, fallbackData)
+			}
 		}
 		// Fall through to legacy CDN on failure
 	}
@@ -647,6 +679,7 @@ func (d *Deezer) getStreamURL(trackID, quality string, songData GWSongData) (Str
 		SongData:         songData,
 		RequestedQuality: quality,
 		ActualQuality:    actualQuality,
+		Copyright:        songData.COPYRIGHT,
 	}, nil
 }
 
@@ -983,7 +1016,13 @@ func (d *Deezer) downloadEncrypted(task deezerDownloadTask, destPath string, pro
 // --- Internal Methods ---
 
 // publicAPICall performs a GET request to the Deezer public API.
+// If the response contains a rate limit error (codes 4 or 700), it sleeps 5s and retries once.
 func (d *Deezer) publicAPICall(path string) ([]byte, error) {
+	return d.publicAPICallInner(path, false)
+}
+
+// publicAPICallInner is the implementation of publicAPICall with a retry flag.
+func (d *Deezer) publicAPICallInner(path string, retried bool) ([]byte, error) {
 	fullURL := PublicAPIBase + path
 
 	req, err := http.NewRequest("GET", fullURL, nil)
@@ -1011,11 +1050,30 @@ func (d *Deezer) publicAPICall(path string) ([]byte, error) {
 		return nil, fmt.Errorf("public API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Check for rate limit errors in the response body
+	if !retried {
+		var apiErr PublicAPIError
+		if json.Unmarshal(body, &apiErr) == nil && (apiErr.Error.Code == 4 || apiErr.Error.Code == 700) {
+			if d.debug {
+				fmt.Fprintf(os.Stderr, "DEBUG: Rate limited (code %d), retrying in 5s...\n", apiErr.Error.Code)
+			}
+			time.Sleep(5 * time.Second)
+			return d.publicAPICallInner(path, true)
+		}
+	}
+
 	return body, nil
 }
 
 // gwAPICall performs a POST request to the Deezer private gw-light API.
+// If the server returns a CSRF token error ("VALID_TOKEN_REQUIRED" or "Invalid CSRF token"),
+// the token is refreshed via refreshCSRFToken and the call is retried once.
 func (d *Deezer) gwAPICall(method string, params interface{}) (json.RawMessage, error) {
+	return d.gwAPICallInner(method, params, false)
+}
+
+// gwAPICallInner is the implementation of gwAPICall with a retry flag to prevent infinite loops.
+func (d *Deezer) gwAPICallInner(method string, params interface{}, retried bool) (json.RawMessage, error) {
 	// Build query string
 	q := url.Values{}
 	q.Set("method", method)
@@ -1067,18 +1125,42 @@ func (d *Deezer) gwAPICall(method string, params interface{}) (json.RawMessage, 
 
 	// Check for errors in the GW response
 	if len(gwResp.Error) > 0 {
-		// Check if any error is non-empty
-		for _, e := range gwResp.Error {
-			if e != nil {
-				errStr := fmt.Sprintf("%v", e)
-				if errStr != "" && errStr != "map[]" {
-					return nil, fmt.Errorf("GW API error: %v", e)
-				}
+		// Check for CSRF token expiry — auto-refresh and retry once
+		if !retried && isCSRFTokenError(gwResp.Error) {
+			if d.debug {
+				fmt.Fprintf(os.Stderr, "DEBUG: CSRF token expired, refreshing...\n")
 			}
+			if refreshErr := d.refreshCSRFToken(); refreshErr != nil {
+				return nil, fmt.Errorf("CSRF token expired and refresh failed: %w", refreshErr)
+			}
+			return d.gwAPICallInner(method, params, true)
 		}
+
+		// Build error message from the map
+		var errParts []string
+		for k, v := range gwResp.Error {
+			errParts = append(errParts, fmt.Sprintf("%s: %s", k, v))
+		}
+		return nil, fmt.Errorf("GW API error: %s", strings.Join(errParts, "; "))
 	}
 
 	return gwResp.Results, nil
+}
+
+// isCSRFTokenError checks if a GW API error map indicates a CSRF token expiry.
+// Deezer returns {"VALID_TOKEN_REQUIRED": "..."} or error values containing
+// "Invalid CSRF token" or "invalid api token".
+func isCSRFTokenError(errMap map[string]string) bool {
+	if _, ok := errMap["VALID_TOKEN_REQUIRED"]; ok {
+		return true
+	}
+	for _, v := range errMap {
+		lower := strings.ToLower(v)
+		if strings.Contains(lower, "invalid csrf token") || strings.Contains(lower, "invalid api token") {
+			return true
+		}
+	}
+	return false
 }
 
 // getSongData fetches private song data using the GW API.

@@ -50,20 +50,21 @@ type TrackList struct {
 
 // TrackResponse is the public API response for a single track.
 type TrackResponse struct {
-	ID            int           `json:"id"`
-	Title         string        `json:"title"`
-	TitleShort    string        `json:"title_short"`
-	ISRC          string        `json:"isrc"`
-	Duration      int           `json:"duration"`
-	TrackPosition int           `json:"track_position"`
-	DiskNumber    int           `json:"disk_number"`
-	ReleaseDate   string        `json:"release_date"`
-	Preview       string        `json:"preview"`
-	MD5Image      string        `json:"md5_image"`
-	Artist        ArtistRef     `json:"artist"`
-	Album         AlbumRef      `json:"album"`
-	Contributors  []Contributor `json:"contributors"`
-	Type          string        `json:"type"`
+	ID             int           `json:"id"`
+	Title          string        `json:"title"`
+	TitleShort     string        `json:"title_short"`
+	ISRC           string        `json:"isrc"`
+	Duration       int           `json:"duration"`
+	TrackPosition  int           `json:"track_position"`
+	DiskNumber     int           `json:"disk_number"`
+	ReleaseDate    string        `json:"release_date"`
+	ExplicitLyrics bool          `json:"explicit_lyrics"`
+	Preview        string        `json:"preview"`
+	MD5Image       string        `json:"md5_image"`
+	Artist         ArtistRef     `json:"artist"`
+	Album          AlbumRef      `json:"album"`
+	Contributors   []Contributor `json:"contributors"`
+	Type           string        `json:"type"`
 }
 
 // AlbumResponse is the public API response for an album.
@@ -113,9 +114,20 @@ type ArtistAlbumsResponse struct {
 // --- Private API Response Types (gw-light.php) ---
 
 // GWResponse is the generic wrapper for all gw-light.php API responses.
+// The error field is a JSON object (map), e.g. {"VALID_TOKEN_REQUIRED": "Invalid CSRF token"}.
 type GWResponse struct {
-	Error   []interface{}   `json:"error"`
-	Results json.RawMessage `json:"results"`
+	Error   map[string]string `json:"error"`
+	Results json.RawMessage   `json:"results"`
+}
+
+// PublicAPIError represents an error response from the Deezer public API.
+// Error codes 4 and 700 indicate rate limiting.
+type PublicAPIError struct {
+	Error struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+		Code    int    `json:"code"`
+	} `json:"error"`
 }
 
 // GWSongData holds the private API song data from song.getData.
