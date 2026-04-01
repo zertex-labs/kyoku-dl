@@ -1,10 +1,10 @@
 # State
 
 ## Current Phase
-Phase 01: Deezer Provider — Plan 3 of 3
+Phase 01: Deezer Provider — Complete (3/3 plans)
 
 ## Progress
-[====================..........] 2/3 plans complete (67%)
+[==============================] 3/3 plans complete (100%)
 
 ## Decisions
 - Use ARL cookie auth (same as deemix/d-fi, no OAuth)
@@ -19,6 +19,10 @@ Phase 01: Deezer Provider — Plan 3 of 3
 - [01-02] Download encrypted to temp .enc file, decrypt to final path — simpler than streaming decryption
 - [01-02] All Deezer streams treated as Blowfish encrypted (both modern media API and legacy CDN)
 - [01-02] Quality fallback based on GW song data FILESIZE fields
+- [01-03] Tidal auth failure changed from fatal to warning for multi-provider support
+- [01-03] Auth login/logout restructured as service-aware subcommands
+- [01-03] Deezer auth loaded lazily — only init session if ARL exists
+- [01-03] Artist session tracking duplicated for Deezer (simple vs shared helper)
 
 ## Blockers
 None
@@ -29,7 +33,8 @@ None
 |------------|----------|-------|-------|
 | 01-01      | 3min     | 2     | 3     |
 | 01-02      | 5min     | 2     | 5     |
+| 01-03      | 3min     | 2     | 3     |
 
 ## Last Session
-- **Stopped at:** Completed 01-02-PLAN.md
-- **Resume:** 01-03-PLAN.md (CLI integration and auth commands)
+- **Stopped at:** Completed 01-03-PLAN.md
+- **Resume:** Phase 01 complete, ready for next phase
