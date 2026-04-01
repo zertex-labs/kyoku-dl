@@ -6,6 +6,29 @@ import (
 	"strings"
 )
 
+// PartialFailureError indicates that a download completed but some tracks failed.
+// The URL field contains the original album/track URL for retry purposes.
+type PartialFailureError struct {
+	URL         string
+	FailedCount int
+	TotalCount  int
+}
+
+func (e *PartialFailureError) Error() string {
+	return fmt.Sprintf("%d/%d tracks failed for %s", e.FailedCount, e.TotalCount, e.URL)
+}
+
+// FailedAlbumsError indicates that one or more albums had track-level failures.
+// FailedURLs contains the album URLs that should be retried.
+type FailedAlbumsError struct {
+	FailedURLs []string
+	Details    []string // human-readable error per album
+}
+
+func (e *FailedAlbumsError) Error() string {
+	return fmt.Sprintf("%d album(s) had failed tracks:\n%s", len(e.FailedURLs), strings.Join(e.Details, "\n"))
+}
+
 // Track represents a generic track from any music service.
 type Track struct {
 	ID        string
@@ -73,7 +96,7 @@ type Provider interface {
 	// MatchesURL returns true if the URL belongs to this service.
 	MatchesURL(url string) bool
 
-	// URLType returns the type of content the URL points to ("track", "album", or "").
+	// URLType returns the type of content the URL points to ("track", "album", "artist", or "").
 	URLType(url string) string
 
 	// IsAuthenticated checks if the provider has valid credentials.
@@ -93,6 +116,10 @@ type Provider interface {
 
 	// DownloadAlbum downloads all tracks from an album by its service URL.
 	DownloadAlbum(url string) error
+
+	// DownloadArtist fetches all albums for an artist, presents a selection UI,
+	// and downloads the selected albums.
+	DownloadArtist(url string) error
 
 	// SetDebug enables or disables debug output.
 	SetDebug(enabled bool)
@@ -153,6 +180,7 @@ func MimeToExtension(mimeType string) string {
 // Supported placeholders:
 //
 //	%artist%, %title%, %album%, %id%, %quality%, %extension%
+//	%albumartist% - album artist (falls back to track artist)
 //	%track%  - zero-padded track number (e.g. "01")
 //	%disc%   - disc number
 //	%year%   - release year (e.g. "2024")
@@ -160,7 +188,13 @@ func MimeToExtension(mimeType string) string {
 func FormatFilename(format string, track Track, extension string, outputDir string) string {
 	filename := format
 
-	artist := track.Artist
+	// Use album artist for folder structure, falling back to track artist.
+	// This keeps compilations/DJ mixes in one folder instead of scattering
+	// tracks across per-artist directories.
+	artist := track.AlbumArtist
+	if artist == "" {
+		artist = track.Artist
+	}
 	if artist == "" {
 		artist = "Unknown Artist"
 	}
@@ -176,6 +210,7 @@ func FormatFilename(format string, track Track, extension string, outputDir stri
 	}
 
 	filename = strings.ReplaceAll(filename, "%id%", track.ID)
+	filename = strings.ReplaceAll(filename, "%albumartist%", SanitizeFilename(artist))
 	filename = strings.ReplaceAll(filename, "%artist%", SanitizeFilename(artist))
 	filename = strings.ReplaceAll(filename, "%title%", SanitizeFilename(title))
 	filename = strings.ReplaceAll(filename, "%album%", SanitizeFilename(album))

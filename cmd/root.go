@@ -25,10 +25,11 @@ var rootCmd = &cobra.Command{
 	Use:   "kyoku-dl",
 	Short: "A command-line tool to download music from various streaming services",
 	Long: `kyoku-dl is a command-line tool to download music from various streaming
-services. Currently supports Tidal (tracks and albums).
+services. Currently supports Tidal (tracks, albums, and artists).
 
 If a URL is provided without a subcommand, it is treated as a download:
-  kyoku-dl https://tidal.com/browse/track/123456789`,
+  kyoku-dl https://tidal.com/browse/track/123456789
+  kyoku-dl https://tidal.com/artist/13427410`,
 
 	// When called with args but no subcommand, delegate to download.
 	RunE: func(cmd *cobra.Command, args []string) error {

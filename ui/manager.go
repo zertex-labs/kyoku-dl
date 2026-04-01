@@ -58,6 +58,31 @@ func (dm *DownloadManager) Run(tasks []DownloadTask) error {
 	return nil
 }
 
+// HasFailedTracks returns true if any tracks ended with StatusError.
+func (dm *DownloadManager) HasFailedTracks() bool {
+	dm.model.mu.Lock()
+	defer dm.model.mu.Unlock()
+	for _, t := range dm.model.Tracks {
+		if t.Status == StatusError {
+			return true
+		}
+	}
+	return false
+}
+
+// FailedTrackCount returns the number of tracks that ended with StatusError.
+func (dm *DownloadManager) FailedTrackCount() int {
+	dm.model.mu.Lock()
+	defer dm.model.mu.Unlock()
+	count := 0
+	for _, t := range dm.model.Tracks {
+		if t.Status == StatusError {
+			count++
+		}
+	}
+	return count
+}
+
 func (dm *DownloadManager) downloadAll(tasks []DownloadTask) {
 	// Create MusicBrainz client if enrichment is enabled
 	var mbClient *provider.MBClient

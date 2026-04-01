@@ -25,8 +25,9 @@ const (
 
 // URL patterns for matching Tidal links
 var (
-	trackPattern = regexp.MustCompile(`tidal\.com.*?/track/(\d+)`)
-	albumPattern = regexp.MustCompile(`tidal\.com.*?/album/(\d+)`)
+	trackPattern  = regexp.MustCompile(`tidal\.com.*?/track/(\d+)`)
+	albumPattern  = regexp.MustCompile(`tidal\.com.*?/album/(\d+)`)
+	artistPattern = regexp.MustCompile(`tidal\.com.*?/artist/(\d+)`)
 )
 
 // Tidal implements the provider.Provider interface for Tidal.
@@ -36,6 +37,17 @@ type Tidal struct {
 	config     provider.Config
 	httpClient *http.Client
 	debug      bool
+
+	// OnAlbumsSelected is called after the user selects albums in an artist
+	// download, before any downloads begin. The callback receives the album
+	// URLs that will be downloaded. Callers can use this to create a session
+	// file for crash recovery.
+	OnAlbumsSelected func(albumURLs []string)
+
+	// OnAlbumComplete is called after each album finishes downloading (success
+	// or failure) during an artist download. The callback receives the album
+	// URL that just completed. Callers can use this to update a session file.
+	OnAlbumComplete func(albumURL string)
 }
 
 // New creates a new Tidal provider with the given auth and config.
@@ -92,16 +104,19 @@ func (t *Tidal) Name() string {
 
 // MatchesURL returns true if the URL belongs to Tidal.
 func (t *Tidal) MatchesURL(rawURL string) bool {
-	return trackPattern.MatchString(rawURL) || albumPattern.MatchString(rawURL)
+	return trackPattern.MatchString(rawURL) || albumPattern.MatchString(rawURL) || artistPattern.MatchString(rawURL)
 }
 
-// URLType returns the type of content the URL points to ("track", "album", or "").
+// URLType returns the type of content the URL points to ("track", "album", "artist", or "").
 func (t *Tidal) URLType(rawURL string) string {
 	if trackPattern.MatchString(rawURL) {
 		return "track"
 	}
 	if albumPattern.MatchString(rawURL) {
 		return "album"
+	}
+	if artistPattern.MatchString(rawURL) {
+		return "artist"
 	}
 	return ""
 }
@@ -413,7 +428,174 @@ func (t *Tidal) DownloadAlbum(tidalURL string) error {
 		t.config,
 	)
 
-	return dm.Run(tasks)
+	if err := dm.Run(tasks); err != nil {
+		return err
+	}
+
+	// Check for partial failures (e.g. 429 rate limits on individual tracks)
+	if dm.HasFailedTracks() {
+		return &provider.PartialFailureError{
+			URL:         tidalURL,
+			FailedCount: dm.FailedTrackCount(),
+			TotalCount:  len(album.Tracks),
+		}
+	}
+
+	return nil
+}
+
+// DownloadArtist fetches all albums for an artist, presents a release-type
+// filter and then an album selection UI, and downloads the chosen albums.
+func (t *Tidal) DownloadArtist(tidalURL string) error {
+	artistID := ExtractArtistID(tidalURL)
+	if artistID == "" {
+		return fmt.Errorf("could not extract artist ID from URL: %s", tidalURL)
+	}
+
+	if !t.IsAuthenticated() {
+		return fmt.Errorf("not authenticated - please check auth.json")
+	}
+
+	// Step 1: Fetch artist metadata and release type counts
+	var artistMeta ArtistMetadata
+	var typeCounts map[string]int
+
+	err := ui.RunLoading("Fetching artist info...", func() error {
+		var err error
+		artistMeta, err = t.getArtistMetadata(artistID)
+		if err != nil {
+			return fmt.Errorf("failed to get artist metadata: %w", err)
+		}
+
+		typeCounts, err = t.getArtistReleaseCounts(artistID)
+		if err != nil {
+			return fmt.Errorf("failed to get release counts: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	totalReleases := 0
+	for _, c := range typeCounts {
+		totalReleases += c
+	}
+	if totalReleases == 0 {
+		fmt.Println("No releases found for this artist.")
+		return nil
+	}
+
+	// Step 2: Let user pick which release types to include
+	selectedFilters, cancelled, err := ui.RunFilter(artistMeta.Name, typeCounts)
+	if err != nil {
+		return fmt.Errorf("release type selection failed: %w", err)
+	}
+	if cancelled || len(selectedFilters) == 0 {
+		fmt.Println("No release types selected.")
+		return nil
+	}
+
+	// Step 3: Fetch albums for the selected release types
+	var albums []AlbumMetadata
+
+	err = ui.RunLoading("Fetching discography...", func() error {
+		var err error
+		albums, err = t.getArtistAlbums(artistID, selectedFilters)
+		if err != nil {
+			return fmt.Errorf("failed to get artist albums: %w", err)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	if len(albums) == 0 {
+		fmt.Println("No albums found for the selected release types.")
+		return nil
+	}
+
+	// Build album choices for the selector UI
+	choices := make([]ui.AlbumChoice, len(albums))
+	for i, album := range albums {
+		choices[i] = ui.AlbumChoice{
+			ID:           strconv.Itoa(album.ID),
+			Title:        album.Title,
+			Artist:       album.Artist.Name,
+			ReleaseType:  formatReleaseType(album.Type),
+			ReleaseDate:  album.ReleaseDate,
+			TrackCount:   album.NumberOfTracks,
+			AudioQuality: album.AudioQuality,
+		}
+	}
+
+	// Step 4: Run the interactive album selector
+	selected, cancelled, err := ui.RunSelector(artistMeta.Name, choices)
+	if err != nil {
+		return fmt.Errorf("album selection failed: %w", err)
+	}
+
+	if cancelled || len(selected) == 0 {
+		fmt.Println("No albums selected.")
+		return nil
+	}
+
+	// Download each selected album sequentially
+	fmt.Printf("\nDownloading %d album(s) from %s\n\n", len(selected), artistMeta.Name)
+
+	// Build album URLs for the selected albums
+	albumURLs := make([]string, len(selected))
+	for i, album := range selected {
+		albumURLs[i] = fmt.Sprintf("https://tidal.com/album/%s", album.ID)
+	}
+
+	// Notify caller of selected albums (for session creation)
+	if t.OnAlbumsSelected != nil {
+		t.OnAlbumsSelected(albumURLs)
+	}
+
+	var failedURLs []string
+	var failedDetails []string
+	var otherErrors []string
+
+	for i, album := range selected {
+		fmt.Printf("Album %d/%d: %s\n", i+1, len(selected), album.Title)
+
+		albumURL := albumURLs[i]
+		if err := t.DownloadAlbum(albumURL); err != nil {
+			if pfe, ok := err.(*provider.PartialFailureError); ok {
+				failedURLs = append(failedURLs, pfe.URL)
+				failedDetails = append(failedDetails, fmt.Sprintf("  %s: %s", album.Title, pfe.Error()))
+			} else {
+				otherErrors = append(otherErrors, fmt.Sprintf("  %s: %v", album.Title, err))
+			}
+		}
+
+		// Notify caller that this album is done (for session update)
+		if t.OnAlbumComplete != nil {
+			t.OnAlbumComplete(albumURL)
+		}
+
+		fmt.Println()
+	}
+
+	// Return partial failure error if any albums had track failures
+	if len(failedURLs) > 0 {
+		return &provider.FailedAlbumsError{
+			FailedURLs: failedURLs,
+			Details:    failedDetails,
+		}
+	}
+
+	if len(otherErrors) > 0 {
+		return fmt.Errorf("some albums failed to download:\n%s", strings.Join(otherErrors, "\n"))
+	}
+
+	return nil
 }
 
 // --- Internal Methods ---
@@ -520,6 +702,122 @@ func (t *Tidal) getAlbumTracks(albumID string) ([]TrackMetadata, error) {
 	}
 
 	return response.Items, nil
+}
+
+func (t *Tidal) getArtistMetadata(artistID string) (ArtistMetadata, error) {
+	apiPath := fmt.Sprintf("artists/%s", artistID)
+
+	query := url.Values{}
+	query.Set("countryCode", t.auth.CountryCode)
+
+	body, status, err := t.performAPICall(apiPath, query)
+	if err != nil {
+		return ArtistMetadata{}, err
+	}
+
+	if status != http.StatusOK {
+		return ArtistMetadata{}, fmt.Errorf("artist metadata request failed with status %d: %s", status, string(body))
+	}
+
+	var metadata ArtistMetadata
+	if err := json.Unmarshal(body, &metadata); err != nil {
+		return ArtistMetadata{}, fmt.Errorf("failed to parse artist metadata: %w", err)
+	}
+
+	return metadata, nil
+}
+
+// getArtistReleaseCounts returns the total number of releases per display
+// category for the given artist. The keys match the UI section labels:
+// "Albums", "EP & Singles", "Compilations".
+func (t *Tidal) getArtistReleaseCounts(artistID string) (map[string]int, error) {
+	type filterLabel struct {
+		filter string
+		label  string
+	}
+	mapping := []filterLabel{
+		{"ALBUMS", "Albums"},
+		{"EPSANDSINGLES", "EP & Singles"},
+		{"COMPILATIONS", "Compilations"},
+	}
+
+	counts := make(map[string]int)
+	for _, fl := range mapping {
+		apiPath := fmt.Sprintf("artists/%s/albums", artistID)
+
+		query := url.Values{}
+		query.Set("countryCode", t.auth.CountryCode)
+		query.Set("filter", fl.filter)
+		query.Set("limit", "1") // We only need totalNumberOfItems
+		query.Set("offset", "0")
+
+		body, status, err := t.performAPICall(apiPath, query)
+		if err != nil {
+			return nil, err
+		}
+
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("artist albums count request failed with status %d: %s", status, string(body))
+		}
+
+		var response ArtistAlbumsResponse
+		if err := json.Unmarshal(body, &response); err != nil {
+			return nil, fmt.Errorf("failed to parse artist albums count: %w", err)
+		}
+
+		counts[fl.label] = response.TotalNumberOfItems
+	}
+
+	return counts, nil
+}
+
+func (t *Tidal) getArtistAlbums(artistID string, filters []string) ([]AlbumMetadata, error) {
+	var allAlbums []AlbumMetadata
+	seen := make(map[int]bool)
+
+	for _, filter := range filters {
+		offset := 0
+		limit := 50
+
+		for {
+			apiPath := fmt.Sprintf("artists/%s/albums", artistID)
+
+			query := url.Values{}
+			query.Set("countryCode", t.auth.CountryCode)
+			query.Set("filter", filter)
+			query.Set("limit", strconv.Itoa(limit))
+			query.Set("offset", strconv.Itoa(offset))
+
+			body, status, err := t.performAPICall(apiPath, query)
+			if err != nil {
+				return nil, err
+			}
+
+			if status != http.StatusOK {
+				return nil, fmt.Errorf("artist albums request failed with status %d: %s", status, string(body))
+			}
+
+			var response ArtistAlbumsResponse
+			if err := json.Unmarshal(body, &response); err != nil {
+				return nil, fmt.Errorf("failed to parse artist albums: %w", err)
+			}
+
+			for _, album := range response.Items {
+				if !seen[album.ID] {
+					seen[album.ID] = true
+					allAlbums = append(allAlbums, album)
+				}
+			}
+
+			// Check if we've fetched all albums for this filter
+			if offset+limit >= response.TotalNumberOfItems {
+				break
+			}
+			offset += limit
+		}
+	}
+
+	return allAlbums, nil
 }
 
 func (t *Tidal) getPlaybackInfo(trackID, quality string) (PlaybackInfo, error) {
@@ -749,4 +1047,33 @@ func ExtractAlbumID(tidalURL string) string {
 		return match[1]
 	}
 	return ""
+}
+
+// ExtractArtistID parses a Tidal URL to extract the artist ID.
+func ExtractArtistID(tidalURL string) string {
+	match := artistPattern.FindStringSubmatch(tidalURL)
+	if len(match) > 1 {
+		return match[1]
+	}
+	return ""
+}
+
+// formatReleaseType converts Tidal album type constants to human-readable format.
+func formatReleaseType(albumType string) string {
+	switch strings.ToUpper(albumType) {
+	case "ALBUM":
+		return "Album"
+	case "SINGLE":
+		return "Single"
+	case "EP":
+		return "EP"
+	case "COMPILATION":
+		return "Compilation"
+	default:
+		if albumType != "" {
+			// Title-case unknown types
+			return strings.ToUpper(albumType[:1]) + strings.ToLower(albumType[1:])
+		}
+		return ""
+	}
 }

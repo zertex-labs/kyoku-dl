@@ -42,6 +42,7 @@ type AlbumMetadata struct {
 	NumberOfTracks  int      `json:"numberOfTracks"`
 	NumberOfVolumes int      `json:"numberOfVolumes"`
 	ReleaseDate     string   `json:"releaseDate"`
+	Type            string   `json:"type,omitempty"` // ALBUM, SINGLE, EP, COMPILATION
 	Copyright       string   `json:"copyright,omitempty"`
 	AudioQuality    string   `json:"audioQuality"`
 	Artist          Artist   `json:"artist"`
@@ -56,6 +57,23 @@ type AlbumTracksResponse struct {
 	Offset             int             `json:"offset"`
 	TotalNumberOfItems int             `json:"totalNumberOfItems"`
 	Items              []TrackMetadata `json:"items"`
+}
+
+// ArtistMetadata is the structure for artist info from /artists/{artistId}
+type ArtistMetadata struct {
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	Picture    string `json:"picture,omitempty"`
+	Popularity int    `json:"popularity,omitempty"`
+	URL        string `json:"url,omitempty"`
+}
+
+// ArtistAlbumsResponse is the structure for /artists/{artistId}/albums
+type ArtistAlbumsResponse struct {
+	Limit              int             `json:"limit"`
+	Offset             int             `json:"offset"`
+	TotalNumberOfItems int             `json:"totalNumberOfItems"`
+	Items              []AlbumMetadata `json:"items"`
 }
 
 // PlaybackInfo is the structure from /playbackinfopostpaywall
