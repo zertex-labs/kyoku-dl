@@ -12,9 +12,10 @@ import (
 
 var (
 	// Global flags
-	cfgFile  string
-	authFile string
-	debug    bool
+	cfgFile        string
+	authFile       string
+	deezerAuthFile string
+	debug          bool
 
 	// Loaded at runtime
 	appConfig provider.Config
@@ -25,11 +26,12 @@ var rootCmd = &cobra.Command{
 	Use:   "kyoku-dl",
 	Short: "A command-line tool to download music from various streaming services",
 	Long: `kyoku-dl is a command-line tool to download music from various streaming
-services. Currently supports Tidal (tracks, albums, and artists).
+services. Supports Tidal and Deezer (tracks, albums, and artists).
 
 If a URL is provided without a subcommand, it is treated as a download:
   kyoku-dl https://tidal.com/browse/track/123456789
-  kyoku-dl https://tidal.com/artist/13427410`,
+  kyoku-dl https://www.deezer.com/track/3135556
+  kyoku-dl https://www.deezer.com/artist/27`,
 
 	// When called with args but no subcommand, delegate to download.
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -58,6 +60,7 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.config/kyoku-dl/config.json)")
 	rootCmd.PersistentFlags().StringVar(&authFile, "auth-file", "", "auth file (default: ~/.config/kyoku-dl/tidal-auth.json)")
+	rootCmd.PersistentFlags().StringVar(&deezerAuthFile, "deezer-auth-file", "", "deezer auth file (default: ~/.config/kyoku-dl/deezer-auth.json)")
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "enable debug output")
 
 	// Register subcommands
@@ -73,6 +76,9 @@ func initConfig() {
 	}
 	if authFile == "" {
 		authFile = filepath.Join(DefaultConfigDir(), "tidal-auth.json")
+	}
+	if deezerAuthFile == "" {
+		deezerAuthFile = filepath.Join(DefaultConfigDir(), "deezer-auth.json")
 	}
 
 	appConfig = loadConfig(cfgFile)

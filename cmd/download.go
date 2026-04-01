@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/zertex-labs/kyoku-dl/provider"
+	"github.com/zertex-labs/kyoku-dl/provider/deezer"
 	"github.com/zertex-labs/kyoku-dl/provider/tidal"
 )
 
@@ -191,7 +192,21 @@ func runDownload(cmd *cobra.Command, args []string) error {
 
 	tidalAuth, err := tidal.EnsureAuth(authFile, tidalAuth)
 	if err != nil {
-		return fmt.Errorf("authentication failed: %w", err)
+		fmt.Fprintf(os.Stderr, "Warning: Tidal authentication failed: %v\n", err)
+	}
+
+	// Authenticate with Deezer
+	deezerAuth, deezerLoadErr := deezer.LoadAuth(deezerAuthFile)
+	if deezerLoadErr != nil {
+		deezerAuth = deezer.Auth{}
+	}
+
+	// Only init session if we have an ARL (don't force login for Deezer if user only uses Tidal)
+	if deezerAuth.ARL != "" {
+		deezerAuth, err = deezer.EnsureAuth(deezerAuthFile, deezerAuth)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Deezer authentication failed: %v\n", err)
+		}
 	}
 
 	// Create registry and register providers
@@ -254,6 +269,55 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	}
 
 	registry.Register(tidalProvider)
+
+	// Create and register Deezer provider
+	deezerProvider := deezer.NewWithPath(deezerAuth, deezerAuthFile, config)
+
+	deezerProvider.OnAlbumsSelected = func(albumURLs []string) {
+		artistMu.Lock()
+		defer artistMu.Unlock()
+
+		artistSessionID = generateSessionID()
+		artistRemaining = make([]string, len(albumURLs))
+		copy(artistRemaining, albumURLs)
+
+		saveArtistSession := func() {
+			dir := sessionsDir()
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return
+			}
+			path := sessionFilePath(artistSessionID)
+			content := strings.Join(artistRemaining, "\n") + "\n"
+			os.WriteFile(path, []byte(content), 0644)
+		}
+		saveArtistSession()
+
+		fmt.Fprintf(os.Stderr, "Artist session: %s (%d album(s))\n", artistSessionID, len(albumURLs))
+		fmt.Fprintf(os.Stderr, "Resume with:    kyoku-dl download -s %s\n\n", artistSessionID)
+	}
+
+	deezerProvider.OnAlbumComplete = func(albumURL string) {
+		artistMu.Lock()
+		defer artistMu.Unlock()
+
+		remaining := make([]string, 0, len(artistRemaining))
+		for _, u := range artistRemaining {
+			if u != albumURL {
+				remaining = append(remaining, u)
+			}
+		}
+		artistRemaining = remaining
+
+		path := sessionFilePath(artistSessionID)
+		if len(artistRemaining) == 0 {
+			os.Remove(path)
+		} else {
+			content := strings.Join(artistRemaining, "\n") + "\n"
+			os.WriteFile(path, []byte(content), 0644)
+		}
+	}
+
+	registry.Register(deezerProvider)
 
 	// Process each URL, tracking failures
 	var downloadErrors []string
