@@ -291,6 +291,9 @@ func (d *Deezer) DownloadTrack(deezerURL string) error {
 				track.Date = albumResp.ReleaseDate
 				track.AlbumArtist = albumResp.Artist.Name
 				track.TotalTracks = albumResp.NbTracks
+				if len(albumResp.Genres.Data) > 0 {
+					track.Genre = albumResp.Genres.Data[0].Name
+				}
 				if track.CoverURL == "" {
 					track.CoverURL = CoverURL(albumResp.MD5Image, 1000)
 				}
@@ -306,6 +309,7 @@ func (d *Deezer) DownloadTrack(deezerURL string) error {
 
 		track.MimeType = streamInfo.MimeType
 		track.StreamURL = streamInfo.URL
+		track.Copyright = streamInfo.Copyright
 
 		// Determine extension and filename
 		ext := provider.MimeToExtension(streamInfo.MimeType)
@@ -390,6 +394,7 @@ func (d *Deezer) DownloadAlbum(deezerURL string) error {
 
 			ext := provider.MimeToExtension(streamInfo.MimeType)
 			track.Album = album.Title
+			track.Copyright = streamInfo.Copyright
 			filePath := provider.FormatFilename(d.config.Format, track, ext, d.config.OutputDir)
 
 			tasks = append(tasks, deezerDownloadTask{
@@ -629,6 +634,24 @@ func (d *Deezer) getStreamURL(trackID, quality string, songData GWSongData) (Str
 		actualQuality = "MP3_128"
 	}
 
+	// License capability pre-check: verify account can stream the requested quality.
+	// This runs AFTER file-size fallback ("does this track have FLAC?") but BEFORE
+	// the media API call ("give me the stream URL"), so users with free/HQ accounts
+	// get a clear warning instead of a cryptic media API error.
+	if actualQuality == "FLAC" && !d.auth.CanStreamLossless {
+		if d.auth.CanStreamHQ {
+			fmt.Fprintf(os.Stderr, "Warning: account cannot stream lossless, falling back to MP3_320\n")
+			actualQuality = "MP3_320"
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: account cannot stream lossless or HQ, falling back to MP3_128\n")
+			actualQuality = "MP3_128"
+		}
+	}
+	if actualQuality == "MP3_320" && !d.auth.CanStreamHQ {
+		fmt.Fprintf(os.Stderr, "Warning: account cannot stream HQ, falling back to MP3_128\n")
+		actualQuality = "MP3_128"
+	}
+
 	mimeType := "audio/mpeg"
 	if actualQuality == "FLAC" {
 		mimeType = "audio/flac"
@@ -737,6 +760,14 @@ func (d *Deezer) resolveMediaURL(trackToken, quality string) (string, error) {
 
 	// Check for errors in the response data
 	if len(mediaResp.Data) > 0 {
+		// Check for geo-restriction errors (code 2002) before checking media
+		if len(mediaResp.Data[0].Errors) > 0 {
+			for _, e := range mediaResp.Data[0].Errors {
+				if e.Code == 2002 {
+					return "", &GeoRestrictedError{Code: e.Code, Message: e.Message}
+				}
+			}
+		}
 		// The API returns errors inside data[].errors[] when track tokens are
 		// expired or the license doesn't cover the requested quality
 		if len(mediaResp.Data[0].Media) == 0 {
@@ -895,11 +926,19 @@ func (d *Deezer) downloadAndDecrypt(task deezerDownloadTask, program *tea.Progra
 
 	encPath := task.FilePath + ".enc"
 
-	// Download encrypted stream to temp file
+	// Download encrypted stream to temp file (retry once on failure)
 	err := d.downloadEncrypted(task, encPath, program, model)
 	if err != nil {
 		os.Remove(encPath)
-		return fmt.Errorf("download failed: %w", err)
+		if d.debug {
+			fmt.Fprintf(os.Stderr, "Download failed, retrying: %v\n", err)
+		}
+		// Retry once
+		err = d.downloadEncrypted(task, encPath, program, model)
+		if err != nil {
+			os.Remove(encPath)
+			return fmt.Errorf("download failed after retry: %w", err)
+		}
 	}
 
 	// Decrypt to final file
@@ -962,6 +1001,13 @@ func (d *Deezer) downloadEncrypted(task deezerDownloadTask, destPath string, pro
 	}
 
 	totalSize := resp.ContentLength
+
+	// Small response detection: responses under 20KB are likely error JSON, not audio
+	if totalSize > 0 && totalSize < 20*1024 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("response too small (%d bytes), likely error: %s", totalSize, string(body))
+	}
+
 	var written int64
 	startTime := time.Now()
 	lastUpdate := time.Now()
