@@ -12,9 +12,9 @@
 - DEE-04: Download track/album/artist with same UX as Tidal (TUI progress, tagging, probing, MusicBrainz)
 - DEE-05: CLI integration — register Deezer provider, add `auth login deezer` command, quality mapping
 
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
-- [ ] 01-01-PLAN.md — Deezer types, auth, and API client (metadata layer)
-- [ ] 01-02-PLAN.md — Stream URL resolution, Blowfish decryption, and download methods
+- [x] 01-01-PLAN.md — Deezer types, auth, and API client (metadata layer)
+- [x] 01-02-PLAN.md — Stream URL resolution, Blowfish decryption, and download methods
 - [ ] 01-03-PLAN.md — CLI integration and auth commands
