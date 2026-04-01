@@ -1,10 +1,10 @@
 # State
 
 ## Current Phase
-Phase 01: Deezer Provider — Complete (3/3 plans)
+Phase 02: Deezer Hardening — Plan 2 of 4
 
 ## Progress
-[==============================] 3/3 plans complete (100%)
+[========                      ] 4/7 plans complete (57%)
 
 ## Decisions
 - Use ARL cookie auth (same as deemix/d-fi, no OAuth)
@@ -23,6 +23,10 @@ Phase 01: Deezer Provider — Complete (3/3 plans)
 - [01-03] Auth login/logout restructured as service-aware subcommands
 - [01-03] Deezer auth loaded lazily — only init session if ARL exists
 - [01-03] Artist session tracking duplicated for Deezer (simple vs shared helper)
+- [02-01] Cookie jar on persistent client replaces all manual AddCookie calls
+- [02-01] initSessionClient reinitializes entire http.Client for clean state
+- [02-01] InitSessionFromARL for in-process session init; standalone InitSession kept for CLI auth
+- [02-01] Removed output=3 query param from gwAPICall to match streamrip
 
 ## Blockers
 None
@@ -34,7 +38,8 @@ None
 | 01-01      | 3min     | 2     | 3     |
 | 01-02      | 5min     | 2     | 5     |
 | 01-03      | 3min     | 2     | 3     |
+| 02-01      | 3min     | 1     | 2     |
 
 ## Last Session
-- **Stopped at:** Completed 01-03-PLAN.md
-- **Resume:** Phase 01 complete, ready for next phase
+- **Stopped at:** Completed 02-01-PLAN.md
+- **Resume:** Ready for 02-02-PLAN.md
