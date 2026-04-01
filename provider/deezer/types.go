@@ -140,6 +140,12 @@ type GWSongData struct {
 	FILESIZE_MP3_320   string `json:"FILESIZE_MP3_320"`
 	FILESIZE_FLAC      string `json:"FILESIZE_FLAC"`
 	COPYRIGHT          string `json:"COPYRIGHT"`
+	FALLBACK           struct {
+		SNG_ID        string `json:"SNG_ID"`
+		MD5_ORIGIN    string `json:"MD5_ORIGIN"`
+		MEDIA_VERSION string `json:"MEDIA_VERSION"`
+		TRACK_TOKEN   string `json:"TRACK_TOKEN"`
+	} `json:"FALLBACK"`
 }
 
 // GWUserData holds the private API user data from deezer.getUserData.
@@ -184,7 +190,15 @@ type MediaResponse struct {
 
 // MediaData holds the media URL data for a single track.
 type MediaData struct {
-	Media []MediaSource `json:"media"`
+	Media  []MediaSource `json:"media"`
+	Errors []MediaError  `json:"errors"`
+}
+
+// MediaError represents an error returned inside media API data entries.
+// Error code 2002 indicates geo-restriction.
+type MediaError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
 }
 
 // MediaSource holds sources for a given media item.
