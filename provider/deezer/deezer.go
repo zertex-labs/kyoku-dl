@@ -28,7 +28,11 @@ const (
 	GWLightBase   = "https://www.deezer.com/ajax/gw-light.php"
 	MediaAPIBase  = "https://media.deezer.com/v1/get_url"
 
-	DefaultTimeout = 10 * time.Second
+	DefaultTimeout = 30 * time.Second
+
+	// browserUA is a modern Chrome User-Agent sent on all Deezer API requests
+	// so the server treats us like a browser session (required for valid responses).
+	browserUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
 // URL patterns for matching Deezer links (support optional language prefix like /en/)
@@ -58,14 +62,21 @@ type Deezer struct {
 
 // New creates a new Deezer provider with the given auth and config.
 func New(auth Auth, config provider.Config) *Deezer {
-	return &Deezer{
+	jar, _ := cookiejar.New(nil)
+	d := &Deezer{
 		auth:   auth,
 		config: config,
 		httpClient: &http.Client{
 			Timeout: DefaultTimeout,
+			Jar:     jar,
 		},
 		debug: config.Debug,
 	}
+	// If auth already has ARL, seed the cookie jar so all requests carry cookies.
+	if auth.ARL != "" {
+		d.initSessionClient(auth.ARL, auth.SessionID)
+	}
+	return d
 }
 
 // NewWithPath creates a new Deezer provider with auth, config, and auth file path.
@@ -121,10 +132,36 @@ func (d *Deezer) SetDebug(enabled bool) {
 	d.debug = enabled
 }
 
-// SetAuth updates the provider's authentication credentials and auth file path.
+// SetAuth updates the provider's authentication credentials and auth file path,
+// and reinitializes the persistent HTTP client with the new auth cookies.
 func (d *Deezer) SetAuth(auth Auth, authPath string) {
 	d.auth = auth
 	d.authPath = authPath
+	if auth.ARL != "" {
+		d.initSessionClient(auth.ARL, auth.SessionID)
+	}
+}
+
+// initSessionClient creates a new persistent http.Client with a cookie jar
+// seeded with the ARL (and optionally sid) cookies on https://www.deezer.com.
+// All subsequent API calls through d.httpClient will carry these cookies
+// automatically, matching streamrip's requests.Session behaviour.
+func (d *Deezer) initSessionClient(arl, sessionID string) {
+	jar, _ := cookiejar.New(nil)
+
+	deezerURL, _ := url.Parse("https://www.deezer.com")
+	cookies := []*http.Cookie{
+		{Name: "arl", Value: arl, Domain: ".deezer.com", Path: "/"},
+	}
+	if sessionID != "" {
+		cookies = append(cookies, &http.Cookie{Name: "sid", Value: sessionID, Domain: ".deezer.com", Path: "/"})
+	}
+	jar.SetCookies(deezerURL, cookies)
+
+	d.httpClient = &http.Client{
+		Timeout: DefaultTimeout,
+		Jar:     jar,
+	}
 }
 
 // GetTrack fetches track metadata by ID.
@@ -614,6 +651,8 @@ func (d *Deezer) getStreamURL(trackID, quality string, songData GWSongData) (Str
 }
 
 // resolveMediaURL calls the modern media.deezer.com API to get a stream URL.
+// The persistent d.httpClient carries ARL and session cookies via its cookie jar,
+// which the media API requires for valid responses.
 func (d *Deezer) resolveMediaURL(trackToken, quality string) (string, error) {
 	reqBody := MediaRequest{
 		LicenseToken: d.auth.LicenseToken,
@@ -637,6 +676,7 @@ func (d *Deezer) resolveMediaURL(trackToken, quality string) (string, error) {
 		return "", fmt.Errorf("failed to create media request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", browserUA)
 
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
@@ -644,17 +684,17 @@ func (d *Deezer) resolveMediaURL(trackToken, quality string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("media API returned status %d", resp.StatusCode)
-	}
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read media response: %w", err)
 	}
 
 	if d.debug {
-		fmt.Printf("\n--- DEBUG: Deezer Media API ---\n%s\n--- END DEBUG ---\n\n", string(body))
+		fmt.Printf("\n--- DEBUG: Deezer Media API (status %d) ---\n%s\n--- END DEBUG ---\n\n", resp.StatusCode, string(body))
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("media API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var mediaResp MediaResponse
@@ -662,8 +702,18 @@ func (d *Deezer) resolveMediaURL(trackToken, quality string) (string, error) {
 		return "", fmt.Errorf("failed to parse media response: %w", err)
 	}
 
-	if len(mediaResp.Data) == 0 || len(mediaResp.Data[0].Media) == 0 || len(mediaResp.Data[0].Media[0].Sources) == 0 {
-		return "", fmt.Errorf("no media sources in response")
+	// Check for errors in the response data
+	if len(mediaResp.Data) > 0 {
+		// The API returns errors inside data[].errors[] when track tokens are
+		// expired or the license doesn't cover the requested quality
+		if len(mediaResp.Data[0].Media) == 0 {
+			return "", fmt.Errorf("media API returned no media entries (track token may be expired or quality unavailable)")
+		}
+		if len(mediaResp.Data[0].Media[0].Sources) == 0 {
+			return "", fmt.Errorf("media API returned no sources for format %s", quality)
+		}
+	} else {
+		return "", fmt.Errorf("media API returned empty data array")
 	}
 
 	return mediaResp.Data[0].Media[0].Sources[0].URL, nil
@@ -936,7 +986,13 @@ func (d *Deezer) downloadEncrypted(task deezerDownloadTask, destPath string, pro
 func (d *Deezer) publicAPICall(path string) ([]byte, error) {
 	fullURL := PublicAPIBase + path
 
-	resp, err := d.httpClient.Get(fullURL)
+	req, err := http.NewRequest("GET", fullURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create public API request: %w", err)
+	}
+	req.Header.Set("User-Agent", browserUA)
+
+	resp, err := d.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("public API request failed: %w", err)
 	}
@@ -966,7 +1022,6 @@ func (d *Deezer) gwAPICall(method string, params interface{}) (json.RawMessage, 
 	q.Set("api_version", "1.0")
 	q.Set("api_token", d.auth.APIToken)
 	q.Set("input", "3")
-	q.Set("output", "3")
 
 	fullURL := GWLightBase + "?" + q.Encode()
 
@@ -988,23 +1043,9 @@ func (d *Deezer) gwAPICall(method string, params interface{}) (json.RawMessage, 
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", browserUA)
 
-	// Set cookies for authentication
-	if d.auth.ARL != "" {
-		req.AddCookie(&http.Cookie{Name: "arl", Value: d.auth.ARL})
-	}
-	if d.auth.SessionID != "" {
-		req.AddCookie(&http.Cookie{Name: "sid", Value: d.auth.SessionID})
-	}
-
-	// Use a client with cookie jar for gw-light calls
-	jar, _ := cookiejar.New(nil)
-	gwClient := &http.Client{
-		Timeout: DefaultTimeout,
-		Jar:     jar,
-	}
-
-	resp, err := gwClient.Do(req)
+	resp, err := d.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GW API request failed: %w", err)
 	}
