@@ -27,6 +27,10 @@ Phase 02: Deezer Hardening — Plan 4 of 4
 - [02-01] initSessionClient reinitializes entire http.Client for clean state
 - [02-01] InitSessionFromARL for in-process session init; standalone InitSession kept for CLI auth
 - [02-01] Removed output=3 query param from gwAPICall to match streamrip
+- [02-02] GWResponse.Error changed from []interface{} to map[string]string — Deezer GW API returns error objects
+- [02-02] CSRF refresh uses getUserData with empty api_token, also refreshes LicenseToken and capability flags
+- [02-02] Rate limit retry uses 5s sleep matching streamrip, max 1 retry
+- [02-02] License pre-check after file-size fallback but before media API call for correct quality cascade
 - [02-03] Single retry for download failures — sufficient for transient network issues
 - [02-03] 20KB threshold for small response detection — error pages always smaller than audio
 - [02-03] Bounded FALLBACK recursion via SNG_ID equality check
@@ -42,8 +46,9 @@ None
 | 01-02      | 5min     | 2     | 5     |
 | 01-03      | 3min     | 2     | 3     |
 | 02-01      | 3min     | 1     | 2     |
+| 02-02      | 5min     | 2     | 3     |
 | 02-03      | 4min     | 2     | 2     |
 
 ## Last Session
-- **Stopped at:** Completed 02-03-PLAN.md
+- **Stopped at:** Completed 02-02-PLAN.md
 - **Resume:** Ready for 02-04-PLAN.md
