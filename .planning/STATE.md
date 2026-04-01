@@ -1,10 +1,10 @@
 # State
 
 ## Current Phase
-Phase 02: Deezer Hardening — Plan 2 of 4
+Phase 02: Deezer Hardening — Plan 4 of 4
 
 ## Progress
-[========                      ] 4/7 plans complete (57%)
+[=====================         ] 6/7 plans complete (86%)
 
 ## Decisions
 - Use ARL cookie auth (same as deemix/d-fi, no OAuth)
@@ -27,6 +27,9 @@ Phase 02: Deezer Hardening — Plan 2 of 4
 - [02-01] initSessionClient reinitializes entire http.Client for clean state
 - [02-01] InitSessionFromARL for in-process session init; standalone InitSession kept for CLI auth
 - [02-01] Removed output=3 query param from gwAPICall to match streamrip
+- [02-03] Single retry for download failures — sufficient for transient network issues
+- [02-03] 20KB threshold for small response detection — error pages always smaller than audio
+- [02-03] Bounded FALLBACK recursion via SNG_ID equality check
 
 ## Blockers
 None
@@ -39,7 +42,8 @@ None
 | 01-02      | 5min     | 2     | 5     |
 | 01-03      | 3min     | 2     | 3     |
 | 02-01      | 3min     | 1     | 2     |
+| 02-03      | 4min     | 2     | 2     |
 
 ## Last Session
-- **Stopped at:** Completed 02-01-PLAN.md
-- **Resume:** Ready for 02-02-PLAN.md
+- **Stopped at:** Completed 02-03-PLAN.md
+- **Resume:** Ready for 02-04-PLAN.md

@@ -39,7 +39,7 @@ Plans:
 - HARD-10: Genre extraction — map AlbumResponse.Genres to track metadata
 - HARD-11: Copyright mapping — map GWSongData.COPYRIGHT to Track.Copyright
 
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 - [x] 02-01-PLAN.md — Persistent HTTP session, browser UA, timeout increase
