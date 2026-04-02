@@ -103,9 +103,9 @@ func BuildLegacyCDNURL(md5Origin, sngID, mediaVersion, quality string) (string, 
 	// Build filename: hash + separator + plaintext + separator
 	filename := hashHex + cdnSeparator + plaintext + cdnSeparator
 
-	// Pad to nearest multiple of 16 with spaces
+	// Pad to nearest multiple of 16 with dots (matches streamrip/d-fi reference implementations)
 	for len(filename)%16 != 0 {
-		filename += " "
+		filename += "."
 	}
 
 	// Encrypt with AES-128-ECB

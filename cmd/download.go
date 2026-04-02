@@ -393,6 +393,16 @@ func runDownload(cmd *cobra.Command, args []string) error {
 }
 
 func downloadURL(registry *provider.Registry, url string) error {
+	// Resolve share/short links (e.g. link.deezer.com/s/XXX) before matching
+	resolved, resolveErr := provider.ResolveURL(url)
+	if resolveErr != nil {
+		return fmt.Errorf("failed to resolve URL %s: %w", url, resolveErr)
+	}
+	if resolved != url {
+		fmt.Fprintf(os.Stderr, "Resolved: %s\n      → %s\n\n", url, resolved)
+		url = resolved
+	}
+
 	p, err := registry.GetProviderForURL(url)
 	if err != nil {
 		return err
@@ -523,6 +533,10 @@ func handleFailedAlbums(registry *provider.Registry, failedURLs []string) {
 		if text != "" {
 			choice = text
 		}
+	} else {
+		// EOF or interrupt (Ctrl+C) — treat as ignore and exit cleanly
+		fmt.Fprintf(os.Stderr, "\n")
+		return
 	}
 
 	switch choice {

@@ -984,13 +984,30 @@ func (d *Deezer) downloadEncrypted(task deezerDownloadTask, destPath string, pro
 		}
 	}()
 
-	client := provider.NewHTTPClient()
-	req, err := provider.NewDownloadRequest(task.StreamURL)
-	if err != nil {
-		return err
+	// Use a download client that shares the session cookie jar (for CDN auth)
+	// but has no timeout (large files can take a while).
+	dlClient := &http.Client{
+		Timeout: 0,
+		Jar:     d.httpClient.Jar,
+		Transport: &http.Transport{
+			MaxIdleConns:        10,
+			IdleConnTimeout:     30 * time.Second,
+			DisableCompression:  true, // Already compressed audio
+			DisableKeepAlives:   false,
+			MaxIdleConnsPerHost: 5,
+		},
 	}
 
-	resp, err := client.Do(req)
+	req, err := http.NewRequest("GET", task.StreamURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("User-Agent", browserUA)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("Connection", "keep-alive")
+
+	resp, err := dlClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to fetch stream: %w", err)
 	}
@@ -1169,10 +1186,10 @@ func (d *Deezer) gwAPICallInner(method string, params interface{}, retried bool)
 		return nil, fmt.Errorf("failed to parse GW API response: %w", err)
 	}
 
-	// Check for errors in the GW response
-	if len(gwResp.Error) > 0 {
+	// Check for errors in the GW response (error field is [] on success, map on error)
+	if errMap := gwResp.GWErrorMap(); errMap != nil {
 		// Check for CSRF token expiry — auto-refresh and retry once
-		if !retried && isCSRFTokenError(gwResp.Error) {
+		if !retried && isCSRFTokenError(errMap) {
 			if d.debug {
 				fmt.Fprintf(os.Stderr, "DEBUG: CSRF token expired, refreshing...\n")
 			}
@@ -1184,7 +1201,7 @@ func (d *Deezer) gwAPICallInner(method string, params interface{}, retried bool)
 
 		// Build error message from the map
 		var errParts []string
-		for k, v := range gwResp.Error {
+		for k, v := range errMap {
 			errParts = append(errParts, fmt.Sprintf("%s: %s", k, v))
 		}
 		return nil, fmt.Errorf("GW API error: %s", strings.Join(errParts, "; "))

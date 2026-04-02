@@ -114,10 +114,29 @@ type ArtistAlbumsResponse struct {
 // --- Private API Response Types (gw-light.php) ---
 
 // GWResponse is the generic wrapper for all gw-light.php API responses.
-// The error field is a JSON object (map), e.g. {"VALID_TOKEN_REQUIRED": "Invalid CSRF token"}.
+// The error field is polymorphic: empty array [] on success, object map on error
+// (e.g. {"VALID_TOKEN_REQUIRED": "Invalid CSRF token"}).
 type GWResponse struct {
-	Error   map[string]string `json:"error"`
-	Results json.RawMessage   `json:"results"`
+	Error   json.RawMessage `json:"error"`
+	Results json.RawMessage `json:"results"`
+}
+
+// GWErrorMap parses the polymorphic error field into a map.
+// Returns nil if the error field is an empty array, empty, or not an object.
+func (r *GWResponse) GWErrorMap() map[string]string {
+	if len(r.Error) == 0 {
+		return nil
+	}
+	// Try parsing as a map (error case)
+	var errMap map[string]string
+	if err := json.Unmarshal(r.Error, &errMap); err != nil {
+		// Not a map — likely an empty array [] (success case)
+		return nil
+	}
+	if len(errMap) == 0 {
+		return nil
+	}
+	return errMap
 }
 
 // PublicAPIError represents an error response from the Deezer public API.
