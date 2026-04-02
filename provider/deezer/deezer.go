@@ -192,8 +192,17 @@ func (d *Deezer) GetAlbum(id string) (provider.Album, error) {
 		return provider.Album{}, fmt.Errorf("failed to parse album response: %w", err)
 	}
 
-	// Convert tracks
-	tracks := make([]provider.Track, len(resp.Tracks.Data))
+	// Fetch full track list from the dedicated tracks endpoint, which includes
+	// track_position and disk_number (the embedded tracks in /album/{id} omit these).
+	tracksBody, err := d.publicAPICall("/album/" + id + "/tracks?limit=10000")
+	if err != nil {
+		return provider.Album{}, fmt.Errorf("failed to get album tracks: %w", err)
+	}
+
+	var trackList TrackList
+	if err := json.Unmarshal(tracksBody, &trackList); err != nil {
+		return provider.Album{}, fmt.Errorf("failed to parse album tracks: %w", err)
+	}
 
 	// Extract primary genre from album
 	albumGenre := ""
@@ -201,7 +210,8 @@ func (d *Deezer) GetAlbum(id string) (provider.Album, error) {
 		albumGenre = resp.Genres.Data[0].Name
 	}
 
-	for i, t := range resp.Tracks.Data {
+	tracks := make([]provider.Track, len(trackList.Data))
+	for i, t := range trackList.Data {
 		track := d.metadataToTrack(t)
 		// Enrich with album-level data
 		track.Date = resp.ReleaseDate

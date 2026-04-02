@@ -232,11 +232,16 @@ type MediaError struct {
 	Message string `json:"message"`
 }
 
+// MediaCipher represents the cipher info returned by the media API.
+type MediaCipher struct {
+	Type string `json:"type"`
+}
+
 // MediaSource holds sources for a given media item.
 type MediaSource struct {
-	Format  string     `json:"format"`
-	Cipher  string     `json:"cipher"`
-	Sources []MediaURL `json:"sources"`
+	Format  string      `json:"format"`
+	Cipher  MediaCipher `json:"cipher"`
+	Sources []MediaURL  `json:"sources"`
 }
 
 // MediaURL is a single stream source URL.
